@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
+import { recordBet, addBalance } from "@/lib/store";
 
 type Tier = "safe" | "attack" | "danger" | "high_danger";
 type Clock = { Running: boolean; Seconds: number };
@@ -98,6 +99,8 @@ export default function ReplayMatch() {
         if (win === null) continue;
         b.status = win ? "won" : "lost";
         applyResult(win);
+        recordBet({ id: b.id, match: `${entryRef.current?.p1 ?? "?"}–${entryRef.current?.p2 ?? "?"}`, mins: b.mins, choice: b.choice, status: b.status, reward: win ? ARCHIVED_REWARD : 0, at: Date.now() });
+        if (win) addBalance(ARCHIVED_REWARD);
         changed = true;
       }
       if (changed) setBets(betsRef.current.slice());
@@ -253,8 +256,10 @@ export default function ReplayMatch() {
   }
 
   return (
-    <div className="min-h-screen w-full flex flex-col items-center px-4 py-6">
-      <div className="w-full max-w-md flex flex-col gap-5">
+    <div className="min-h-screen">
+      <main className="app-container py-6">
+        <div className="lg:grid lg:grid-cols-3 lg:gap-6 max-w-md lg:max-w-none mx-auto">
+          <div className="lg:col-span-2 flex flex-col gap-5">
         <div className="flex items-center justify-between">
           <Link href="/" className="text-muted hover:text-foreground text-sm">← matches</Link>
           <div className="flex items-center gap-2">
@@ -319,29 +324,33 @@ export default function ReplayMatch() {
           </div>
         )}
 
-        <div className="card-surface rounded-2xl p-4">
-          <div className="text-xs uppercase tracking-widest text-muted mb-2">Your bets</div>
-          {bets.length === 0 && <span className="text-muted text-sm">no bets yet — tap YES / NO when a high-danger prompt fires.</span>}
-          <div className="flex flex-col gap-2">
-            {bets.map((b) => (
-              <div key={b.id} className="flex items-center justify-between text-sm">
-                <span className="text-foreground">
-                  Goal in {b.mins}m · <span className={b.choice === "YES" ? "text-success font-bold" : "text-destructive font-bold"}>{b.choice}</span>
-                </span>
-                {b.status === "open" && <span className="text-primary text-xs font-mono">⏳ settling by {fmtClock({ Running: true, Seconds: b.deadlineSec })}</span>}
-                {b.status === "won" && <span className="text-success text-xs font-bold">✓ +{ARCHIVED_REWARD} SPIKES</span>}
-                {b.status === "lost" && <span className="text-destructive text-xs font-bold">✕ missed</span>}
+            {done && (
+              <div className="text-center text-muted text-sm">
+                Full time. <Link href="/" className="text-primary font-bold">pick another match →</Link>
               </div>
-            ))}
+            )}
           </div>
-        </div>
 
-        {done && (
-          <div className="text-center text-muted text-sm">
-            Full time. <Link href="/" className="text-primary font-bold">pick another match →</Link>
-          </div>
-        )}
-      </div>
+          <aside className="lg:col-span-1 mt-5 lg:mt-0">
+            <div className="lg:sticky lg:top-6 card-surface rounded-2xl p-4">
+              <div className="text-xs uppercase tracking-widest text-muted mb-2">Your bets</div>
+              {bets.length === 0 && <span className="text-muted text-sm">no bets yet — tap YES / NO when a high-danger prompt fires.</span>}
+              <div className="flex flex-col gap-2">
+                {bets.map((b) => (
+                  <div key={b.id} className="flex items-center justify-between text-sm">
+                    <span className="text-foreground">
+                      Goal in {b.mins}m · <span className={b.choice === "YES" ? "text-success font-bold" : "text-destructive font-bold"}>{b.choice}</span>
+                    </span>
+                    {b.status === "open" && <span className="text-primary text-xs font-mono">⏳ {fmtClock({ Running: true, Seconds: b.deadlineSec })}</span>}
+                    {b.status === "won" && <span className="text-success text-xs font-bold">✓ +{ARCHIVED_REWARD}</span>}
+                    {b.status === "lost" && <span className="text-destructive text-xs font-bold">✕ missed</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </aside>
+        </div>
+      </main>
 
       {prompt && <PromptCard prompt={prompt} onAnswer={answer} />}
 

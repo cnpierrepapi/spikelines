@@ -77,3 +77,26 @@ body {
 .countdown-ring {
   transition: stroke-dashoffset 5s linear;
 }
+.app-container {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 1rem;
+}
+@media (min-width: 768px) {
+  .app-container {
+    padding: 0 2rem;
+  }
+}
+.nav-blur {
+  background: rgba(5, 14, 26, 0.72);
+  backdrop-filter: blur(12px);
+}
+.hero-fade {
+  background: linear-gradient(to top, #050e1a 6%, rgba(5, 14, 26, 0) 72%);
+}
+.hero-bg {
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(47, 95, 153, 0.25), transparent 60%),
+    linear-gradient(135deg, rgba(15, 30, 53, 0.95) 0%, rgba(10, 22, 40, 0.98) 100%);
+}
