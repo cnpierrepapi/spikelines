@@ -3,8 +3,8 @@
 // ⚠️ TxLINE's push stream /api/scores/stream is heartbeat-only on the free tier
 // (scores aren't sampled), so we POLL /api/scores/snapshot/{fid} every few
 // seconds and diff it instead. The snapshot returns the latest record of each
-// action type (possession tiers, score, clock); we compute the current state and
-// emit the SAME {momentum|goal|red|score} events the client already consumes.
+// action type, each carrying the FULL cumulative Score.Total per team, so we can
+// derive multiple bettable markets (goal/corner/booking) + shots, all per side.
 // Uses a server-held apiToken (env) — no keypair.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,12 +18,18 @@ const POSS: Record<string, "safe" | "attack" | "danger" | "high_danger"> = {
   danger_possession: "danger",
   high_danger_possession: "high_danger",
 };
-// Scoring-chance actions that should trigger a "Goal in next N min?" prompt.
-// high_danger alone is too rare (~0.8/min and seldom the newest possession
-// record); danger + shots bring the trigger rate to ~2.3/min = a lively game.
-const CHANCE = new Set(["high_danger_possession", "danger_possession", "shot", "penalty"]);
-const g = (s: any, p: string) => s?.[p]?.Total?.Goals ?? 0;
-const r_ = (s: any, p: string) => s?.[p]?.Total?.RedCards ?? 0;
+// Actions that open a betting prompt, mapped to the trigger the client uses to
+// pick a market. high_danger → goal-heavy, attack → corner/shot, etc.
+const TRIGGER: Record<string, "high_danger" | "danger" | "attack" | "shot" | "free_kick"> = {
+  high_danger_possession: "high_danger",
+  penalty: "high_danger",
+  danger_possession: "danger",
+  attack_possession: "attack",
+  shot: "shot",
+  free_kick: "free_kick",
+};
+const tot = (s: any, p: string, k: string) => s?.[p]?.Total?.[k] ?? 0;
+const sideOf = (p: unknown): 1 | 2 => (p === 2 ? 2 : 1);
 
 export async function GET(request: Request, ctx: { params: Promise<{ fid: string }> }) {
   const { fid: fidStr } = await ctx.params;
@@ -37,9 +43,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
     async start(controller) {
       let closed = false;
       const send = (o: unknown) => {
-        try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(o)}\n\n`));
-        } catch {}
+        try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(o)}\n\n`)); } catch {}
       };
       if (!base || !jwt || !apiToken) {
         send({ t: "error", msg: "live not configured" });
@@ -52,9 +56,9 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
       const stop = () => { closed = true; upstream.abort(); };
       request.signal.addEventListener("abort", stop);
 
-      // prev state: started=false so we don't fire goal/red for events that
-      // happened before the viewer connected (first poll only seeds the baseline).
-      const prev = { p1g: 0, p2g: 0, p1r: 0, p2r: 0, possTs: 0, chanceTs: 0, started: false };
+      // started=false so the first poll only seeds the baseline (no settle/prompt
+      // events for things that happened before the viewer connected).
+      const prev = { g1: 0, g2: 0, c1: 0, c2: 0, y1: 0, y2: 0, r1: 0, r2: 0, possTs: 0, chanceTs: 0, shotTs: 0, started: false };
 
       async function poll() {
         const res = await fetch(`${base}/api/scores/snapshot/${fid}`, {
@@ -66,44 +70,55 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
         const j: any = await res.json();
         const arr: any[] = Array.isArray(j) ? j : [j];
 
-        // Reduce the per-action-type snapshot to "current" clock / possession / score
-        // by taking the most recent record (max Ts) in each category.
         let clock: any, clockTs = -1;
         let possRec: any, possTs = -1;
         let scoreRec: any, scoreTs = -1;
         let chanceRec: any, chanceTs = -1;
+        let shotRec: any, shotTs = -1;
         for (const rr of arr) {
           if (rr.Clock && rr.Ts > clockTs) { clock = rr.Clock; clockTs = rr.Ts; }
           if (POSS[rr.Action as string] && rr.Ts > possTs) { possRec = rr; possTs = rr.Ts; }
           if (rr.Score && rr.Ts > scoreTs) { scoreRec = rr; scoreTs = rr.Ts; }
-          if (CHANCE.has(rr.Action as string) && rr.Ts > chanceTs) { chanceRec = rr; chanceTs = rr.Ts; }
+          if (TRIGGER[rr.Action as string] && rr.Ts > chanceTs) { chanceRec = rr; chanceTs = rr.Ts; }
+          if (rr.Action === "shot" && rr.Ts > shotTs) { shotRec = rr; shotTs = rr.Ts; }
         }
 
+        // Scoreboard + per-side stat deltas (each Score record carries full totals).
         if (scoreRec) {
-          const p1g = g(scoreRec.Score, "Participant1"), p2g = g(scoreRec.Score, "Participant2");
-          const p1r = r_(scoreRec.Score, "Participant1"), p2r = r_(scoreRec.Score, "Participant2");
+          const S = scoreRec.Score;
+          const cur = {
+            g1: tot(S, "Participant1", "Goals"), g2: tot(S, "Participant2", "Goals"),
+            c1: tot(S, "Participant1", "Corners"), c2: tot(S, "Participant2", "Corners"),
+            y1: tot(S, "Participant1", "YellowCards"), y2: tot(S, "Participant2", "YellowCards"),
+            r1: tot(S, "Participant1", "RedCards"), r2: tot(S, "Participant2", "RedCards"),
+          };
+          send({ t: "score", score: { p1: cur.g1, p2: cur.g2 }, clock });
           if (prev.started) {
-            if (p1g > prev.p1g || p2g > prev.p2g) send({ t: "goal", clock, score: { p1: p1g, p2: p2g } });
-            if (p1r > prev.p1r || p2r > prev.p2r) send({ t: "red", clock });
+            if (cur.g1 > prev.g1) send({ t: "stat", kind: "goal", side: 1, clock });
+            if (cur.g2 > prev.g2) send({ t: "stat", kind: "goal", side: 2, clock });
+            if (cur.c1 > prev.c1) send({ t: "stat", kind: "corner", side: 1, clock });
+            if (cur.c2 > prev.c2) send({ t: "stat", kind: "corner", side: 2, clock });
+            if (cur.y1 > prev.y1 || cur.r1 > prev.r1) send({ t: "stat", kind: "booking", side: 1, clock });
+            if (cur.y2 > prev.y2 || cur.r2 > prev.r2) send({ t: "stat", kind: "booking", side: 2, clock });
           }
-          Object.assign(prev, { p1g, p2g, p1r, p2r });
-          send({ t: "score", score: { p1: p1g, p2: p2g }, clock });
+          Object.assign(prev, cur);
         }
 
-        // New possession event (Ts advanced) → momentum drives the meter.
+        // Meter follows possession.
         if (possRec && possTs !== prev.possTs) {
           prev.possTs = possTs;
-          const participant = possRec.Participant === 2 || possRec.Participant === possRec.Participant2Id ? 2 : 1;
-          send({ t: "momentum", tier: POSS[possRec.Action as string], participant, clock });
+          send({ t: "momentum", tier: POSS[possRec.Action as string], participant: sideOf(possRec.Participant), clock });
         }
 
-        // New scoring chance (Ts advanced) → fires the prompt + a meter spike.
-        // Skip the first poll's baseline so we don't fire for a stale chance.
+        // Shot event = settlement signal for the shot market (no Score.Total).
+        if (shotRec && shotTs !== prev.shotTs) {
+          if (prev.started) send({ t: "event", kind: "shot", side: sideOf(shotRec.Participant), clock });
+          prev.shotTs = shotTs;
+        }
+
+        // Scoring chance → prompt opportunity, tagged with trigger + attacking side.
         if (chanceRec && chanceTs !== prev.chanceTs) {
-          if (prev.started) {
-            const participant = chanceRec.Participant === 2 || chanceRec.Participant === chanceRec.Participant2Id ? 2 : 1;
-            send({ t: "chance", kind: chanceRec.Action, participant, clock });
-          }
+          if (prev.started) send({ t: "chance", trigger: TRIGGER[chanceRec.Action as string], side: sideOf(chanceRec.Participant), clock });
           prev.chanceTs = chanceTs;
         }
         prev.started = true;
