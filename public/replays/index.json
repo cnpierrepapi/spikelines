@@ -12,7 +12,8 @@
     "goals": 6,
     "possession": 611,
     "records": 943,
-    "minutes": 95
+    "minutes": 95,
+    "gameState": "scheduled"
   },
   {
     "fid": 17588309,
@@ -27,7 +28,8 @@
     "goals": 2,
     "possession": 800,
     "records": 1140,
-    "minutes": 99
+    "minutes": 99,
+    "gameState": "scheduled"
   },
   {
     "fid": 17588404,
@@ -42,7 +44,8 @@
     "goals": 1,
     "possession": 600,
     "records": 882,
-    "minutes": 96
+    "minutes": 96,
+    "gameState": "scheduled"
   },
   {
     "fid": 17588314,
@@ -57,6 +60,7 @@
     "goals": 0,
     "possession": 764,
     "records": 1072,
-    "minutes": 95
+    "minutes": 95,
+    "gameState": "scheduled"
   }
 ]

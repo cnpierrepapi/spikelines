@@ -43,3 +43,5 @@ next-env.d.ts
 # local secrets / token cache
 .txline-cache.*.json
 .env
+
+.vercel

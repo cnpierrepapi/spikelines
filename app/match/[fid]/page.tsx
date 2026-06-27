@@ -16,8 +16,8 @@ type Rec = {
   Ts?: number;
 };
 type Entry = { fid: number; p1: string; p2: string; iso1: string; iso2: string; minutes: number };
-type Prompt = { id: number; sec: number; answered: null | "YES" | "NO" };
-type Stub = { id: number; win: boolean; hash: string };
+type Prompt = { id: number; sec: number; mins: number; answered: null | "YES" | "NO" };
+type Bet = { id: number; mins: number; choice: "YES" | "NO"; deadlineSec: number; status: "open" | "won" | "lost" };
 
 const TIER: Record<Tier, { reach: number; color: string; label: string }> = {
   safe: { reach: 6, color: "#2f5f99", label: "settled" },
@@ -26,12 +26,19 @@ const TIER: Record<Tier, { reach: number; color: string; label: string }> = {
   high_danger: { reach: 44, color: "#ff5a67", label: "HIGH DANGER" },
 };
 const RING = 2 * Math.PI * 26;
-const RESOLVE_SEC = 120; // a goal within 2 match-minutes = "goal happened"
+const ARCHIVED_REWARD = 5; // SPIKES per correct call on archived matches
+// Rotate the question window across 2–10 min; longer windows (7–10) show 70% of the time.
+function pickWindow() {
+  const longs = [7, 8, 9, 10];
+  const shorts = [2, 3, 4, 5, 6];
+  return Math.random() < 0.7 ? longs[Math.floor(Math.random() * longs.length)] : shorts[Math.floor(Math.random() * shorts.length)];
+}
 const fmtClock = (c?: Clock) =>
   c ? `${String(Math.floor(c.Seconds / 60)).padStart(2, "0")}:${String(c.Seconds % 60).padStart(2, "0")}` : "00:00";
 const rand = () => Math.random().toString(16).slice(2, 10);
 const totalGoals = (score: any, p: string) => score?.[p]?.Total?.Goals ?? 0;
 const totalReds = (score: any, p: string) => score?.[p]?.Total?.RedCards ?? 0;
+const totalYel = (score: any, p: string) => score?.[p]?.Total?.YellowCards ?? 0;
 
 export default function ReplayMatch() {
   const params = useParams<{ fid: string }>();
@@ -49,13 +56,14 @@ export default function ReplayMatch() {
   const [streak, setStreak] = useState(0);
   const [spotr, setSpotr] = useState(0);
   const [prompt, setPrompt] = useState<Prompt | null>(null);
-  const [stubs, setStubs] = useState<Stub[]>([]);
+  const [bets, setBets] = useState<Bet[]>([]);
+  const [events, setEvents] = useState<{ id: number; icon: string; label: string; min: number }[]>([]);
   const [graduated, setGraduated] = useState(false);
 
   const recs = useRef<Rec[]>([]);
   const ptr = useRef(0);
   const paused = useRef(false);
-  const prev = useRef({ p1g: 0, p2g: 0, p1r: 0, p2r: 0 });
+  const prev = useRef({ p1g: 0, p2g: 0, p1r: 0, p2r: 0, p1y: 0, p2y: 0 });
   const secRef = useRef(0);
   const cooldownSec = useRef(0);
   const promptRef = useRef<Prompt | null>(null);
@@ -63,16 +71,43 @@ export default function ReplayMatch() {
   const speedRef = useRef(1);
   speedRef.current = speed;
   const p2idRef = useRef<number | undefined>(undefined);
-  const watchers = useRef<{ id: number; choice: "YES" | "NO"; deadline: number }[]>([]);
+  const betsRef = useRef<Bet[]>([]);
+  const eventsRef = useRef<{ id: number; icon: string; label: string; min: number }[]>([]);
+  const entryRef = useRef<Entry | null>(null);
+  entryRef.current = entry;
 
-  const resolve = useCallback((win: boolean) => {
-    setStubs((s) => [{ id: Date.now() + Math.random(), win, hash: rand() }, ...s].slice(0, 10));
+  const applyResult = useCallback((win: boolean) => {
     if (win) {
-      setSpotr((v) => v + 250);
+      setSpotr((v) => v + ARCHIVED_REWARD);
       setStreak((k) => k + 1);
     } else {
       setStreak(0);
     }
+  }, []);
+
+  // Settle open bets: a goal settles YES-as-win; an elapsed window settles NO-as-win.
+  const settle = useCallback(
+    (goalJust: boolean) => {
+      const sec = secRef.current;
+      let changed = false;
+      for (const b of betsRef.current) {
+        if (b.status !== "open") continue;
+        let win: boolean | null = null;
+        if (goalJust) win = b.choice === "YES";
+        else if (sec > b.deadlineSec) win = b.choice === "NO";
+        if (win === null) continue;
+        b.status = win ? "won" : "lost";
+        applyResult(win);
+        changed = true;
+      }
+      if (changed) setBets(betsRef.current.slice());
+    },
+    [applyResult]
+  );
+
+  const addEvent = useCallback((icon: string, label: string) => {
+    eventsRef.current = [{ id: Date.now() + Math.random(), icon, label, min: Math.floor(secRef.current / 60) }, ...eventsRef.current].slice(0, 8);
+    setEvents(eventsRef.current.slice());
   }, []);
 
   useEffect(() => {
@@ -84,7 +119,9 @@ export default function ReplayMatch() {
       const p = promptRef.current;
       if (!p || p.answered) return;
       setPrompt({ ...p, answered: choice });
-      watchers.current.push({ id: p.id, choice, deadline: p.sec + RESOLVE_SEC });
+      const bet: Bet = { id: p.id, mins: p.mins, choice, deadlineSec: p.sec + p.mins * 60, status: "open" };
+      betsRef.current = [bet, ...betsRef.current].slice(0, 12);
+      setBets(betsRef.current.slice());
       cooldownSec.current = p.sec + 90;
       setTimeout(() => {
         setPrompt((cur) => (cur && cur.id === p.id ? null : cur));
@@ -129,7 +166,7 @@ export default function ReplayMatch() {
           setTier(t);
           setAttacker(r.Participant === p2idRef.current ? 2 : 1);
           if (t === "high_danger" && !promptRef.current && sec >= cooldownSec.current) {
-            const p: Prompt = { id: Date.now(), sec, answered: null };
+            const p: Prompt = { id: Date.now(), sec, mins: pickWindow(), answered: null };
             setPrompt(p);
             paused.current = true; // freeze-frame for the call
             setTimeout(() => {
@@ -145,31 +182,36 @@ export default function ReplayMatch() {
         }
       }
 
-      // goals / red cards via score deltas
+      if (r.Action === "penalty") addEvent("🎯", "Penalty awarded");
+      else if (r.Action === "var") addEvent("📺", "VAR review");
+
+      // goals / cards via score deltas
       if (r.Score) {
         const p1g = totalGoals(r.Score, "Participant1");
         const p2g = totalGoals(r.Score, "Participant2");
         const p1r = totalReds(r.Score, "Participant1");
         const p2r = totalReds(r.Score, "Participant2");
-        const goal = p1g > prev.current.p1g || p2g > prev.current.p2g;
-        prev.current = { p1g, p2g, p1r, p2r };
+        const p1y = totalYel(r.Score, "Participant1");
+        const p2y = totalYel(r.Score, "Participant2");
+        const pc = prev.current;
+        const n1 = entryRef.current?.p1 ?? "Home";
+        const n2 = entryRef.current?.p2 ?? "Away";
+        if (p1g > pc.p1g) addEvent("⚽", `Goal — ${n1}`);
+        if (p2g > pc.p2g) addEvent("⚽", `Goal — ${n2}`);
+        if (p1r > pc.p1r) addEvent("🟥", `Red card — ${n1}`);
+        if (p2r > pc.p2r) addEvent("🟥", `Red card — ${n2}`);
+        if (p1y > pc.p1y) addEvent("🟨", `Yellow — ${n1}`);
+        if (p2y > pc.p2y) addEvent("🟨", `Yellow — ${n2}`);
+        const goal = p1g > pc.p1g || p2g > pc.p2g;
+        prev.current = { p1g, p2g, p1r, p2r, p1y, p2y };
         setScore({ p1: p1g, p2: p2g });
-        if (goal && watchers.current.length) {
-          for (const w of watchers.current) resolve(w.choice === "YES");
-          watchers.current = [];
-        }
+        if (goal) settle(true);
       }
 
-      // settle "no goal" calls whose 2-min window has elapsed
-      if (watchers.current.length) {
-        const expired = watchers.current.filter((w) => sec > w.deadline);
-        if (expired.length) {
-          for (const w of expired) resolve(w.choice === "NO");
-          watchers.current = watchers.current.filter((w) => sec <= w.deadline);
-        }
-      }
+      // settle "no goal" calls whose window has elapsed
+      settle(false);
     },
-    [resolve]
+    [settle, addEvent]
   );
 
   // Replay loop
@@ -187,7 +229,7 @@ export default function ReplayMatch() {
         process(recs.current[ptr.current]);
         ptr.current++;
       }
-      timer = setTimeout(tick, 200 / speedRef.current);
+      timer = setTimeout(tick, 150 / speedRef.current);
     };
     tick();
     return () => {
@@ -258,17 +300,37 @@ export default function ReplayMatch() {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-primary font-black text-xl tabular-nums">{spotr.toLocaleString()}</span>
-            <span className="text-muted text-xs">SPOTR</span>
+            <span className="text-muted text-xs">SPIKES</span>
           </div>
         </div>
 
+        {events.length > 0 && (
+          <div className="card-surface rounded-2xl p-4">
+            <div className="text-xs uppercase tracking-widest text-muted mb-2">Match events</div>
+            <div className="flex flex-col gap-1.5">
+              {events.map((e) => (
+                <div key={e.id} className="flex items-center gap-2 text-sm">
+                  <span className="text-muted font-mono text-xs w-8">{e.min}&apos;</span>
+                  <span>{e.icon}</span>
+                  <span className="text-foreground">{e.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="card-surface rounded-2xl p-4">
-          <div className="text-xs uppercase tracking-widest text-muted mb-2">Proofs · verified on-chain</div>
-          <div className="flex flex-wrap gap-2">
-            {stubs.length === 0 && <span className="text-muted text-sm">your calls will be stamped here — wins and losses, un-deletable.</span>}
-            {stubs.map((s) => (
-              <div key={s.id} className={`text-[11px] font-mono px-2 py-1 rounded-md border ${s.win ? "border-success/40 text-success" : "border-destructive/40 text-destructive"}`}>
-                {s.win ? "✓" : "✕"} {s.hash}
+          <div className="text-xs uppercase tracking-widest text-muted mb-2">Your bets</div>
+          {bets.length === 0 && <span className="text-muted text-sm">no bets yet — tap YES / NO when a high-danger prompt fires.</span>}
+          <div className="flex flex-col gap-2">
+            {bets.map((b) => (
+              <div key={b.id} className="flex items-center justify-between text-sm">
+                <span className="text-foreground">
+                  Goal in {b.mins}m · <span className={b.choice === "YES" ? "text-success font-bold" : "text-destructive font-bold"}>{b.choice}</span>
+                </span>
+                {b.status === "open" && <span className="text-primary text-xs font-mono">⏳ settling by {fmtClock({ Running: true, Seconds: b.deadlineSec })}</span>}
+                {b.status === "won" && <span className="text-success text-xs font-bold">✓ +{ARCHIVED_REWARD} SPIKES</span>}
+                {b.status === "lost" && <span className="text-destructive text-xs font-bold">✕ missed</span>}
               </div>
             ))}
           </div>
@@ -288,8 +350,8 @@ export default function ReplayMatch() {
           <div className="card-surface gold-glow rounded-2xl p-8 max-w-sm text-center animate-pop">
             <div className="text-5xl mb-3">👁️</div>
             <h2 className="text-2xl font-black mb-2">You&apos;ve got the eye</h2>
-            <p className="text-muted mb-5">7-streak. <span className="text-primary font-bold">500 SPOTR</span> is yours — claim it in Flashcalls.</p>
-            <button className="w-full py-3 rounded-xl bg-primary text-background font-black gold-glow">Claim 500 SPOTR →</button>
+            <p className="text-muted mb-5">7-streak. <span className="text-primary font-bold">500 SPIKES</span> is yours — claim it in Flashcalls.</p>
+            <button className="w-full py-3 rounded-xl bg-primary text-background font-black gold-glow">Claim 500 SPIKES →</button>
           </div>
         </div>
       )}
@@ -325,7 +387,7 @@ function PromptCard({ prompt, onAnswer }: { prompt: Prompt; onAnswer: (c: "YES" 
             <circle cx="28" cy="28" r="26" fill="none" stroke="#ff5a67" strokeWidth="4" strokeLinecap="round" strokeDasharray={RING} strokeDashoffset={armed ? RING : 0} className="countdown-ring" transform="rotate(-90 28 28)" />
           </svg>
         </div>
-        <p className="text-xl font-black mb-4 leading-snug">Goal in the next 2 minutes?</p>
+        <p className="text-xl font-black mb-4 leading-snug">Goal in the next {prompt.mins} {prompt.mins === 1 ? "minute" : "minutes"}?</p>
         {answered ? (
           <div className="text-center py-3 text-muted font-medium">
             Locked in: <span className={answered === "YES" ? "text-success" : "text-destructive"}>{answered}</span> ✓
