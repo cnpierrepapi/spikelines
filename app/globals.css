@@ -1,26 +1,79 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* ── SPOTR palette (from spotr-mvp): yellow + blue on deep navy ── */
+@theme {
+  --color-background: #050e1a;
+  --color-foreground: #f7f1e4;
+  --color-primary: #f5c800; /* SPOTR yellow */
+  --color-success: #25d16b; /* YES */
+  --color-destructive: #ff5a67; /* NO */
+  --color-accent: #2f5f99;
+  --color-category-blue: #1b4f8c;
+  --color-trust: #3b82f6;
+  --color-card: #0a1628;
+  --color-danger: #ff9f43;
+  --color-muted: #8b93a3;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --font-display: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+body {
+  background:
+    radial-gradient(1200px 600px at 50% -10%, rgba(47, 95, 153, 0.18), transparent 60%),
+    var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@keyframes popUp {
+  from {
+    opacity: 0;
+    transform: translateY(48px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes flame {
+  0%,
+  100% {
+    transform: scale(1) rotate(-2deg);
+  }
+  50% {
+    transform: scale(1.14) rotate(2deg);
+  }
+}
+@keyframes orbPulse {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.25);
+  }
+}
+.animate-pop {
+  animation: popUp 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.flame {
+  animation: flame 0.9s ease-in-out infinite;
+}
+.orb-pulse {
+  animation: orbPulse 0.7s ease-in-out infinite;
+}
+.danger-glow {
+  box-shadow: 0 0 70px rgba(255, 90, 103, 0.5);
+}
+.gold-glow {
+  box-shadow: 0 0 36px rgba(245, 200, 0, 0.28);
+}
+.card-surface {
+  background: linear-gradient(135deg, rgba(15, 30, 53, 0.9) 0%, rgba(10, 22, 40, 0.96) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.countdown-ring {
+  transition: stroke-dashoffset 5s linear;
 }

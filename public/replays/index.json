@@ -1,0 +1,62 @@
+[
+  {
+    "fid": 17588323,
+    "p1": "New Zealand",
+    "p2": "Belgium",
+    "iso1": "nz",
+    "iso2": "be",
+    "finalScore": {
+      "p1": 1,
+      "p2": 5
+    },
+    "goals": 6,
+    "possession": 611,
+    "records": 943,
+    "minutes": 95
+  },
+  {
+    "fid": 17588309,
+    "p1": "Egypt",
+    "p2": "Iran",
+    "iso1": "eg",
+    "iso2": "ir",
+    "finalScore": {
+      "p1": 1,
+      "p2": 1
+    },
+    "goals": 2,
+    "possession": 800,
+    "records": 1140,
+    "minutes": 99
+  },
+  {
+    "fid": 17588404,
+    "p1": "Uruguay",
+    "p2": "Spain",
+    "iso1": "uy",
+    "iso2": "es",
+    "finalScore": {
+      "p1": 0,
+      "p2": 1
+    },
+    "goals": 1,
+    "possession": 600,
+    "records": 882,
+    "minutes": 96
+  },
+  {
+    "fid": 17588314,
+    "p1": "Cape Verde",
+    "p2": "Saudi Arabia",
+    "iso1": "cv",
+    "iso2": "sa",
+    "finalScore": {
+      "p1": 0,
+      "p2": 0
+    },
+    "goals": 0,
+    "possession": 764,
+    "records": 1072,
+    "minutes": 95
+  }
+]
