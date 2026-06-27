@@ -3,6 +3,7 @@
 // runtime. The fixtures snapshot has no live flag, so "live" = kickoff window
 // (started within the last ~2.5h).
 import { iso } from "@/lib/iso";
+import { finishedFids } from "@/lib/live-state";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,8 +26,12 @@ export async function GET() {
     const j: any = await res.json();
     const arr: any[] = Array.isArray(j) ? j : j.fixtures || j.data || j.items || [];
     const now = Date.now();
-    const matches = arr
-      .filter((f) => f.CompetitionId === 72 && f.StartTime <= now && now <= f.StartTime + LIVE_WINDOW_MS)
+    const candidates = arr.filter((f) => f.CompetitionId === 72 && f.StartTime <= now && now <= f.StartTime + LIVE_WINDOW_MS);
+
+    // Drop matches whose scores feed has finalised — they belong in Archived now.
+    const finished = await finishedFids(base, jwt, apiToken, candidates.map((f) => f.FixtureId));
+    const matches = candidates
+      .filter((f) => !finished.has(f.FixtureId))
       .map((f) => ({
         fid: f.FixtureId,
         p1: f.Participant1,

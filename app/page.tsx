@@ -39,6 +39,10 @@ export default function Lobby() {
   const heroFix = fixtures[0];
   const heroArch = archived?.[0];
 
+  // A finished match we've recorded lives in Archived — don't also show it as Live.
+  const archivedFids = new Set((archived ?? []).map((a) => a.fid));
+  const liveOnly = (live ?? []).filter((m) => !archivedFids.has(m.fid));
+
   return (
     <div className="min-h-screen">
       <nav className="sticky top-0 z-30 nav-blur border-b border-white/[0.06]">
@@ -68,8 +72,8 @@ export default function Lobby() {
               </div>
               <div className="grid sm:grid-cols-2 gap-3">
                 {live === null && <div className="text-muted text-sm">checking…</div>}
-                {live?.length === 0 && <div className="card-surface rounded-2xl p-4 text-muted text-sm sm:col-span-2">No live matches right now — play an archived one.</div>}
-                {live?.map((m) => (
+                {live !== null && liveOnly.length === 0 && <div className="card-surface rounded-2xl p-4 text-muted text-sm sm:col-span-2">No live matches right now — play an archived one.</div>}
+                {liveOnly.map((m) => (
                   <MatchRow key={m.fid} href={`/live/${m.fid}`} m={m} live />
                 ))}
               </div>

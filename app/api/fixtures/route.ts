@@ -2,6 +2,7 @@
 // strength — feeds the desktop "hero" match. Uses the server-held mainnet token.
 import { iso } from "@/lib/iso";
 import { fifaRank } from "@/lib/fifa";
+import { finishedFids } from "@/lib/live-state";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,8 +24,15 @@ export async function GET() {
     const j: any = await res.json();
     const arr: any[] = Array.isArray(j) ? j : j.fixtures || j.data || [];
     const now = Date.now();
-    const fixtures = arr
-      .filter((f) => f.CompetitionId === 72 && f.StartTime >= now - LIVE_WINDOW_MS && f.StartTime <= now + AHEAD_MS)
+    const inWindow = arr.filter((f) => f.CompetitionId === 72 && f.StartTime >= now - LIVE_WINDOW_MS && f.StartTime <= now + AHEAD_MS);
+
+    // Exclude finished matches (they headline Archived, not the live hero). Only
+    // started fixtures can be finished, so we only check those.
+    const started = inWindow.filter((f) => f.StartTime <= now && now <= f.StartTime + LIVE_WINDOW_MS);
+    const finished = await finishedFids(base, jwt, apiToken, started.map((f) => f.FixtureId));
+
+    const fixtures = inWindow
+      .filter((f) => !finished.has(f.FixtureId))
       .map((f) => ({
         fid: f.FixtureId,
         p1: f.Participant1,
