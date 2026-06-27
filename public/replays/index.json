@@ -1,5 +1,37 @@
 [
   {
+    "fid": 17588402,
+    "p1": "Panama",
+    "p2": "England",
+    "iso1": "pa",
+    "iso2": "gb-eng",
+    "finalScore": {
+      "p1": 1,
+      "p2": 2
+    },
+    "goals": 3,
+    "possession": 799,
+    "records": 1181,
+    "minutes": 96,
+    "source": "mainnet-live"
+  },
+  {
+    "fid": 17588245,
+    "p1": "Croatia",
+    "p2": "Ghana",
+    "iso1": "hr",
+    "iso2": "gh",
+    "finalScore": {
+      "p1": 2,
+      "p2": 1
+    },
+    "goals": 3,
+    "possession": 696,
+    "records": 989,
+    "minutes": 97,
+    "source": "mainnet-live"
+  },
+  {
     "fid": 17588323,
     "p1": "New Zealand",
     "p2": "Belgium",
