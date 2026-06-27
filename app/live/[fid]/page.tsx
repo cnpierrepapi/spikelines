@@ -3,11 +3,12 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
+import { recordBet, addBalance } from "@/lib/store";
 
 type Tier = "safe" | "attack" | "danger" | "high_danger";
 type Clock = { Running: boolean; Seconds: number };
 type Prompt = { id: number; sec: number; mins: number; answered: null | "YES" | "NO" };
-type Stub = { id: number; win: boolean; hash: string };
+type Bet = { id: number; mins: number; choice: "YES" | "NO"; deadlineSec: number; status: "open" | "won" | "lost" };
 type LiveEntry = { fid: number; p1: string; p2: string; iso1: string; iso2: string };
 
 const TIER: Record<Tier, { reach: number; color: string; label: string }> = {
@@ -17,10 +18,9 @@ const TIER: Record<Tier, { reach: number; color: string; label: string }> = {
   high_danger: { reach: 44, color: "#ff5a67", label: "HIGH DANGER" },
 };
 const RING = 2 * Math.PI * 26;
-const LIVE_REWARD = 100;
+const LIVE_REWARD = 100; // SPIKES per correct call on live matches
 const PROMPT_COOLDOWN = 45; // match-seconds between prompts
 const fmtClock = (c?: Clock) => (c ? `${String(Math.floor(c.Seconds / 60)).padStart(2, "0")}:${String(c.Seconds % 60).padStart(2, "0")}` : "00:00");
-const rand = () => Math.random().toString(16).slice(2, 10);
 function pickWindow() {
   const longs = [7, 8, 9, 10], shorts = [2, 3, 4, 5, 6];
   return Math.random() < 0.7 ? longs[Math.floor(Math.random() * longs.length)] : shorts[Math.floor(Math.random() * shorts.length)];
@@ -40,43 +40,58 @@ export default function LiveMatch() {
   const [streak, setStreak] = useState(0);
   const [spotr, setSpotr] = useState(0);
   const [prompt, setPrompt] = useState<Prompt | null>(null);
-  const [stubs, setStubs] = useState<Stub[]>([]);
+  const [bets, setBets] = useState<Bet[]>([]);
+  const [graduated, setGraduated] = useState(false);
 
   const promptRef = useRef<Prompt | null>(null);
   promptRef.current = prompt;
   const secRef = useRef(0);
   const cooldownSec = useRef(0);
-  const watchers = useRef<{ id: number; choice: "YES" | "NO"; deadline: number }[]>([]);
+  const betsRef = useRef<Bet[]>([]);
+  const entryRef = useRef<LiveEntry | null>(null);
+  entryRef.current = entry;
 
-  const resolve = useCallback((win: boolean) => {
-    setStubs((s) => [{ id: Date.now() + Math.random(), win, hash: rand() }, ...s].slice(0, 10));
+  const applyResult = useCallback((win: boolean) => {
     if (win) {
       setSpotr((v) => v + LIVE_REWARD);
       setStreak((k) => k + 1);
     } else setStreak(0);
   }, []);
 
-  const settleExpired = useCallback(() => {
-    const sec = secRef.current;
-    const exp = watchers.current.filter((w) => sec > w.deadline);
-    if (exp.length) {
-      for (const w of exp) resolve(w.choice === "NO");
-      watchers.current = watchers.current.filter((w) => sec <= w.deadline);
-    }
-  }, [resolve]);
+  // Settle open bets: a goal settles YES-as-win; an elapsed window settles NO-as-win.
+  const settle = useCallback(
+    (goalJust: boolean) => {
+      const sec = secRef.current;
+      let changed = false;
+      for (const b of betsRef.current) {
+        if (b.status !== "open") continue;
+        let win: boolean | null = null;
+        if (goalJust) win = b.choice === "YES";
+        else if (sec > b.deadlineSec) win = b.choice === "NO";
+        if (win === null) continue;
+        b.status = win ? "won" : "lost";
+        applyResult(win);
+        recordBet({ id: b.id, match: `${entryRef.current?.p1 ?? "?"}–${entryRef.current?.p2 ?? "?"}`, mins: b.mins, choice: b.choice, status: b.status, reward: win ? LIVE_REWARD : 0, at: Date.now() });
+        if (win) addBalance(LIVE_REWARD);
+        changed = true;
+      }
+      if (changed) setBets(betsRef.current.slice());
+    },
+    [applyResult]
+  );
 
   const answer = useCallback((choice: "YES" | "NO") => {
     const p = promptRef.current;
     if (!p || p.answered) return;
     setPrompt({ ...p, answered: choice });
-    watchers.current.push({ id: p.id, choice, deadline: p.sec + p.mins * 60 });
+    const bet: Bet = { id: p.id, mins: p.mins, choice, deadlineSec: p.sec + p.mins * 60, status: "open" };
+    betsRef.current = [bet, ...betsRef.current].slice(0, 12);
+    setBets(betsRef.current.slice());
     setTimeout(() => setPrompt((cur) => (cur && cur.id === p.id ? null : cur)), 1300);
   }, []);
 
   useEffect(() => {
-    if (streak >= 7) {
-      /* graduation hook — kept subtle on live */
-    }
+    if (streak >= 7) setGraduated(true);
   }, [streak]);
 
   useEffect(() => {
@@ -112,66 +127,96 @@ export default function LiveMatch() {
         setScore(ev.score);
       } else if (ev.t === "goal") {
         setScore(ev.score);
-        if (watchers.current.length) {
-          for (const w of watchers.current) resolve(w.choice === "YES");
-          watchers.current = [];
-        }
+        settle(true);
       }
-      settleExpired();
+      settle(false);
     };
     es.onerror = () => setConnected(false);
     return () => es.close();
-  }, [fid, resolve, settleExpired]);
+  }, [fid, settle]);
 
   const ti = TIER[tier];
   const pos = 50 + (attacker === 2 ? ti.reach : -ti.reach);
   const hot = tier === "high_danger";
 
   return (
-    <div className="min-h-screen w-full flex flex-col items-center px-4 py-6">
-      <div className="w-full max-w-md flex flex-col gap-5">
-        <div className="flex items-center justify-between">
-          <Link href="/" className="text-muted hover:text-foreground text-sm">← matches</Link>
-          <span className={`text-xs font-mono px-2 py-1 rounded-full border ${connected ? "text-destructive border-destructive/40" : "text-muted border-white/10"}`}>
-            {connected ? "● LIVE" : "connecting…"}
-          </span>
-        </div>
+    <div className="min-h-screen">
+      <main className="app-container py-6">
+        <div className="lg:grid lg:grid-cols-3 lg:gap-6 max-w-md lg:max-w-none mx-auto">
+          <div className="lg:col-span-2 flex flex-col gap-5">
+            <div className="flex items-center justify-between">
+              <Link href="/" className="text-muted hover:text-foreground text-sm">← matches</Link>
+              <span className={`text-xs font-mono px-2 py-1 rounded-full border ${connected ? "text-destructive border-destructive/40" : "text-muted border-white/10"}`}>
+                {connected ? "● LIVE" : "connecting…"}
+              </span>
+            </div>
 
-        <div className="card-surface rounded-2xl p-4 flex items-center justify-between">
-          <Team name={entry?.p1 ?? "Home"} iso={entry?.iso1} goals={score.p1} active={attacker === 1 && tier !== "safe"} />
-          <div className="text-center">
-            <div className="text-3xl font-black tabular-nums">{score.p1}<span className="text-muted mx-1">–</span>{score.p2}</div>
-            <div className="text-xs font-mono text-muted mt-1">{fmtClock(clock)}</div>
-          </div>
-          <Team name={entry?.p2 ?? "Away"} iso={entry?.iso2} goals={score.p2} active={attacker === 2 && tier !== "safe"} right />
-        </div>
+            <div className="card-surface rounded-2xl p-4 flex items-center justify-between">
+              <Team name={entry?.p1 ?? "Home"} iso={entry?.iso1} goals={score.p1} active={attacker === 1 && tier !== "safe"} />
+              <div className="text-center">
+                <div className="text-3xl font-black tabular-nums">{score.p1}<span className="text-muted mx-1">–</span>{score.p2}</div>
+                <div className="text-xs font-mono text-muted mt-1">{fmtClock(clock)}</div>
+              </div>
+              <Team name={entry?.p2 ?? "Away"} iso={entry?.iso2} goals={score.p2} active={attacker === 2 && tier !== "safe"} right />
+            </div>
 
-        <div className={`card-surface rounded-2xl p-5 ${hot ? "danger-glow" : ""}`}>
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs uppercase tracking-widest text-muted">Momentum</span>
-            <span className="text-xs font-bold uppercase tracking-wider" style={{ color: ti.color }}>{hot && "⚠ "}{ti.label}</span>
-          </div>
-          <div className="relative h-3 rounded-full" style={{ background: "linear-gradient(90deg,#1b4f8c33,#0a1628 50%,#1b4f8c33)" }}>
-            <div className={`absolute top-1/2 w-5 h-5 rounded-full transition-all duration-500 ${hot ? "orb-pulse" : ""}`} style={{ left: `${pos}%`, transform: "translate(-50%,-50%)", background: ti.color, boxShadow: `0 0 20px ${ti.color}` }} />
-          </div>
-          {!seen && <div className="text-muted text-xs mt-3 text-center">waiting for the match to come alive…</div>}
-        </div>
+            <div className={`card-surface rounded-2xl p-5 ${hot ? "danger-glow" : ""}`}>
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs uppercase tracking-widest text-muted">Momentum</span>
+                <span className="text-xs font-bold uppercase tracking-wider" style={{ color: ti.color }}>{hot && "⚠ "}{ti.label}</span>
+              </div>
+              <div className="relative h-3 rounded-full" style={{ background: "linear-gradient(90deg,#1b4f8c33,#0a1628 50%,#1b4f8c33)" }}>
+                <div className={`absolute top-1/2 w-5 h-5 rounded-full transition-all duration-500 ${hot ? "orb-pulse" : ""}`} style={{ left: `${pos}%`, transform: "translate(-50%,-50%)", background: ti.color, boxShadow: `0 0 20px ${ti.color}` }} />
+              </div>
+              {!seen && <div className="text-muted text-xs mt-3 text-center">waiting for the match to come alive…</div>}
+            </div>
 
-        <div className="flex items-center justify-between px-1">
-          <div className="flex items-center gap-2">
-            <span className={`text-2xl ${streak > 0 ? "flame" : "opacity-30"}`}>🔥</span>
-            <span className="font-black text-xl tabular-nums">{streak}</span>
-            <span className="text-muted text-xs">streak</span>
+            <div className="flex items-center justify-between px-1">
+              <div className="flex items-center gap-2">
+                <span className={`text-2xl ${streak > 0 ? "flame" : "opacity-30"}`}>🔥</span>
+                <span className="font-black text-xl tabular-nums">{streak}</span>
+                <span className="text-muted text-xs">streak</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-primary font-black text-xl tabular-nums">{spotr.toLocaleString()}</span>
+                <span className="text-muted text-xs">SPIKES</span>
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-primary font-black text-xl tabular-nums">{spotr.toLocaleString()}</span>
-            <span className="text-muted text-xs">SPIKES</span>
-          </div>
-        </div>
 
-      </div>
+          <aside className="lg:col-span-1 mt-5 lg:mt-0">
+            <div className="lg:sticky lg:top-6 card-surface rounded-2xl p-4">
+              <div className="text-xs uppercase tracking-widest text-muted mb-2">Your bets</div>
+              {bets.length === 0 && <span className="text-muted text-sm">no bets yet — tap YES / NO when a high-danger prompt fires.</span>}
+              <div className="flex flex-col gap-2">
+                {bets.map((b) => (
+                  <div key={b.id} className="flex items-center justify-between text-sm">
+                    <span className="text-foreground">
+                      Goal in {b.mins}m · <span className={b.choice === "YES" ? "text-success font-bold" : "text-destructive font-bold"}>{b.choice}</span>
+                    </span>
+                    {b.status === "open" && <span className="text-primary text-xs font-mono">⏳ {fmtClock({ Running: true, Seconds: b.deadlineSec })}</span>}
+                    {b.status === "won" && <span className="text-success text-xs font-bold">✓ +{LIVE_REWARD}</span>}
+                    {b.status === "lost" && <span className="text-destructive text-xs font-bold">✕ missed</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </aside>
+        </div>
+      </main>
 
       {prompt && <PromptCard prompt={prompt} onAnswer={answer} />}
+
+      {graduated && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 backdrop-blur-sm px-6" onClick={() => setGraduated(false)}>
+          <div className="card-surface gold-glow rounded-2xl p-8 max-w-sm text-center animate-pop">
+            <div className="text-5xl mb-3">👁️</div>
+            <h2 className="text-2xl font-black mb-2">You&apos;ve got the eye</h2>
+            <p className="text-muted mb-5">7-streak. <span className="text-primary font-bold">500 SPIKES</span> is yours — claim it in Flashcalls.</p>
+            <button className="w-full py-3 rounded-xl bg-primary text-background font-black gold-glow">Claim 500 SPIKES →</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
