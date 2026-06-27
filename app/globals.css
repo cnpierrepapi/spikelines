@@ -1,10 +1,10 @@
 @import "tailwindcss";
 
-/* ── SPOTR palette (from spotr-mvp): yellow + blue on deep navy ── */
+/* ── SPIKES palette: yellow + blue on deep navy ── */
 @theme {
   --color-background: #050e1a;
   --color-foreground: #f7f1e4;
-  --color-primary: #f5c800; /* SPOTR yellow */
+  --color-primary: #f5c800; /* SPIKES yellow */
   --color-success: #25d16b; /* YES */
   --color-destructive: #ff5a67; /* NO */
   --color-accent: #2f5f99;

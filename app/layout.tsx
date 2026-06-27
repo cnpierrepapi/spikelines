@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Spikelines — feel the match",
-  description: "Tap the momentum. A SPOTR game on live World Cup data.",
+  description: "Tap the momentum. A SPIKES game on live World Cup data.",
 };
 
 export default function RootLayout({
