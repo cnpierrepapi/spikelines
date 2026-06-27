@@ -111,7 +111,7 @@ export default function Lobby() {
               </div>
               <div className="card-surface rounded-2xl p-5">
                 <div className="text-xs uppercase tracking-widest text-muted mb-2">How it works</div>
-                <p className="text-muted text-sm leading-relaxed">When the momentum spikes to <span className="text-destructive font-semibold">high danger</span>, call whether a goal lands in the window. Build a streak — every match runs on TxLINE&apos;s verifiable World Cup feed, anchored on Solana.</p>
+                <p className="text-muted text-sm leading-relaxed">When a team <span className="text-primary font-semibold">builds an attack</span>, a quick call fires — will they <span className="text-foreground font-semibold">score, win a corner or get a shot away</span> (or will someone get booked) before the window closes? Tap YES / NO, build a streak. Every match runs on TxLINE&apos;s verifiable World Cup feed, anchored on Solana.</p>
               </div>
             </div>
           </aside>
