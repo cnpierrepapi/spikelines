@@ -18,6 +18,10 @@ const POSS: Record<string, "safe" | "attack" | "danger" | "high_danger"> = {
   danger_possession: "danger",
   high_danger_possession: "high_danger",
 };
+// Scoring-chance actions that should trigger a "Goal in next N min?" prompt.
+// high_danger alone is too rare (~0.8/min and seldom the newest possession
+// record); danger + shots bring the trigger rate to ~2.3/min = a lively game.
+const CHANCE = new Set(["high_danger_possession", "danger_possession", "shot", "penalty"]);
 const g = (s: any, p: string) => s?.[p]?.Total?.Goals ?? 0;
 const r_ = (s: any, p: string) => s?.[p]?.Total?.RedCards ?? 0;
 
@@ -50,7 +54,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
 
       // prev state: started=false so we don't fire goal/red for events that
       // happened before the viewer connected (first poll only seeds the baseline).
-      const prev = { p1g: 0, p2g: 0, p1r: 0, p2r: 0, possTs: 0, started: false };
+      const prev = { p1g: 0, p2g: 0, p1r: 0, p2r: 0, possTs: 0, chanceTs: 0, started: false };
 
       async function poll() {
         const res = await fetch(`${base}/api/scores/snapshot/${fid}`, {
@@ -67,10 +71,12 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
         let clock: any, clockTs = -1;
         let possRec: any, possTs = -1;
         let scoreRec: any, scoreTs = -1;
+        let chanceRec: any, chanceTs = -1;
         for (const rr of arr) {
           if (rr.Clock && rr.Ts > clockTs) { clock = rr.Clock; clockTs = rr.Ts; }
           if (POSS[rr.Action as string] && rr.Ts > possTs) { possRec = rr; possTs = rr.Ts; }
           if (rr.Score && rr.Ts > scoreTs) { scoreRec = rr; scoreTs = rr.Ts; }
+          if (CHANCE.has(rr.Action as string) && rr.Ts > chanceTs) { chanceRec = rr; chanceTs = rr.Ts; }
         }
 
         if (scoreRec) {
@@ -84,11 +90,21 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
           send({ t: "score", score: { p1: p1g, p2: p2g }, clock });
         }
 
-        // New possession event (Ts advanced) → momentum. high_danger drives prompts.
+        // New possession event (Ts advanced) → momentum drives the meter.
         if (possRec && possTs !== prev.possTs) {
           prev.possTs = possTs;
           const participant = possRec.Participant === 2 || possRec.Participant === possRec.Participant2Id ? 2 : 1;
           send({ t: "momentum", tier: POSS[possRec.Action as string], participant, clock });
+        }
+
+        // New scoring chance (Ts advanced) → fires the prompt + a meter spike.
+        // Skip the first poll's baseline so we don't fire for a stale chance.
+        if (chanceRec && chanceTs !== prev.chanceTs) {
+          if (prev.started) {
+            const participant = chanceRec.Participant === 2 || chanceRec.Participant === chanceRec.Participant2Id ? 2 : 1;
+            send({ t: "chance", kind: chanceRec.Action, participant, clock });
+          }
+          prev.chanceTs = chanceTs;
         }
         prev.started = true;
       }

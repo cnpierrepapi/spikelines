@@ -18,6 +18,7 @@ const TIER: Record<Tier, { reach: number; color: string; label: string }> = {
 };
 const RING = 2 * Math.PI * 26;
 const LIVE_REWARD = 100;
+const PROMPT_COOLDOWN = 45; // match-seconds between prompts
 const fmtClock = (c?: Clock) => (c ? `${String(Math.floor(c.Seconds / 60)).padStart(2, "0")}:${String(c.Seconds % 60).padStart(2, "0")}` : "00:00");
 const rand = () => Math.random().toString(16).slice(2, 10);
 function pickWindow() {
@@ -97,10 +98,14 @@ export default function LiveMatch() {
       if (ev.t === "momentum") {
         setTier(ev.tier);
         setAttacker(ev.participant);
-        if (ev.tier === "high_danger" && !promptRef.current && secRef.current >= cooldownSec.current) {
+      } else if (ev.t === "chance") {
+        // A scoring chance (dangerous attack / shot) — spike the meter and offer a call.
+        setTier("high_danger");
+        if (ev.participant) setAttacker(ev.participant);
+        if (!promptRef.current && secRef.current >= cooldownSec.current) {
           const p: Prompt = { id: Date.now(), sec: secRef.current, mins: pickWindow(), answered: null };
           setPrompt(p);
-          cooldownSec.current = secRef.current + 90;
+          cooldownSec.current = secRef.current + PROMPT_COOLDOWN;
           setTimeout(() => setPrompt((cur) => (cur && cur.id === p.id && !cur.answered ? null : cur)), 5000);
         }
       } else if (ev.t === "score") {
