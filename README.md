@@ -1,6 +1,6 @@
 # Spikelines
 
-**Feel the match.** A real-time "what happens next?" micro-prediction game built on live World Cup data, cryptographically verified on Solana via [TxLINE](https://txline.txodds.com). Part of the **SPOTR** family.
+**Feel the match.** A real-time "what happens next?" micro-prediction game built on live World Cup data, cryptographically verified on Solana via [TxLINE](https://txline.txodds.com). Shares the **SPIKES** currency with its sister products Flashcalls & Agenthesis.
 
 🔗 **Live:** https://spikelines.vercel.app
 
@@ -10,7 +10,7 @@
 
 As a team builds an attack, a quick call fires — *will they score, win a corner, or get a shot away (or will someone get booked) before the window closes?* Tap **YES / NO**, build a streak, earn **SPIKES**. Every resolution is settled against TxLINE's World Cup feed, anchored on Solana, so outcomes can't be faked.
 
-It's the free, viral top of the SPOTR funnel: a 7-streak graduates you into **Flashcalls** with bonus credits.
+It's the free, viral top of the funnel: a 7-streak graduates you into **Flashcalls** with bonus credits.
 
 ## How it works
 
