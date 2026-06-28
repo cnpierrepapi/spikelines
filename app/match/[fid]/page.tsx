@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { recordBet, addBalance } from "@/lib/store";
+import { recordBet, addBalance, hasPlayed, markPlayed } from "@/lib/store";
 import { celebrateFrom } from "@/lib/celebrate";
 import { type MarketKind, type Side, type Trigger, sideOf, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
@@ -66,6 +66,12 @@ export default function ReplayMatch() {
   const [events, setEvents] = useState<{ id: number; icon: string; label: string; min: number }[]>([]);
   const [justWon, setJustWon] = useState<number[]>([]);
   const [graduated, setGraduated] = useState(false);
+  const [blocked, setBlocked] = useState(false); // one-shot: already played this match
+
+  // Decide on mount only, so marking-as-played mid-game doesn't block the session.
+  useEffect(() => {
+    if (hasPlayed(fid)) setBlocked(true);
+  }, [fid]);
 
   const recs = useRef<Rec[]>([]);
   const ptr = useRef(0);
@@ -139,12 +145,13 @@ export default function ReplayMatch() {
       const bet: Bet = { id: p.id, market: p.market, side: p.side, mins: p.mins, choice, deadlineSec: p.sec + p.mins * 60, status: "open", label: marketLabel(p.market, p.side, teamName(p.side === 0 ? 1 : (p.side as 1 | 2)), p.mins) };
       betsRef.current = [bet, ...betsRef.current].slice(0, 12);
       setBets(betsRef.current.slice());
+      markPlayed(fid); // first call consumes this match (one-shot-per-match)
       setTimeout(() => {
         setPrompt((cur) => (cur && cur.id === p.id ? null : cur));
         paused.current = false; // resume replay
       }, 1300);
     },
-    [teamName]
+    [teamName, fid]
   );
 
   // Load match data: prefer the curated static archive, else fall back to the
@@ -255,7 +262,7 @@ export default function ReplayMatch() {
 
   // Replay loop
   useEffect(() => {
-    if (!loaded || recs.current.length === 0) return;
+    if (!loaded || blocked || recs.current.length === 0) return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
     const tick = () => {
@@ -275,12 +282,23 @@ export default function ReplayMatch() {
       alive = false;
       clearTimeout(timer);
     };
-  }, [loaded, process]);
+  }, [loaded, blocked, process]);
 
   const ti = TIER[tier];
   const pos = 50 + (attacker === 2 ? ti.reach : -ti.reach);
   const hot = tier === "high_danger";
   const progress = recs.current.length ? Math.min(100, Math.round((ptr.current / recs.current.length) * 100)) : 0;
+
+  if (blocked) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 px-4 text-center">
+        <div className="text-5xl">✓</div>
+        <p className="text-foreground font-bold text-lg">You&apos;ve already played this match.</p>
+        <p className="text-muted text-sm max-w-xs">Each match can only be played once — pick another to keep building your streak.</p>
+        <Link href="/" className="text-primary font-bold mt-2">← back to matches</Link>
+      </div>
+    );
+  }
 
   if (loaded && recs.current.length === 0) {
     return (

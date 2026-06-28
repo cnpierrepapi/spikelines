@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { getBalance, getBets, type StoredBet } from "@/lib/store";
+import { getBalance, getBets, getPlayed, type StoredBet } from "@/lib/store";
 
 type Archived = { fid: number; p1: string; p2: string; iso1: string; iso2: string; goals: number; minutes: number };
 type Live = { fid: number; p1: string; p2: string; iso1: string; iso2: string };
@@ -28,6 +28,7 @@ export default function Lobby() {
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [balance, setBalance] = useState(0);
   const [recent, setRecent] = useState<StoredBet[]>([]);
+  const [played, setPlayed] = useState<number[]>([]);
 
   useEffect(() => {
     fetch("/replays/index.json").then((r) => r.json()).then(setArchived).catch(() => setArchived([]));
@@ -36,6 +37,7 @@ export default function Lobby() {
     fetch("/api/fixtures").then((r) => r.json()).then((d) => setFixtures(d.fixtures ?? [])).catch(() => setFixtures([]));
     setBalance(getBalance());
     setRecent(getBets().slice(0, 8));
+    setPlayed(getPlayed());
   }, []);
 
   // Archived = curated static replays + recently-finished matches (runtime),
@@ -81,7 +83,7 @@ export default function Lobby() {
                 {live === null && <div className="text-muted text-sm">checking…</div>}
                 {live !== null && liveOnly.length === 0 && <div className="card-surface rounded-2xl p-4 text-muted text-sm sm:col-span-2">No live matches right now — play an archived one.</div>}
                 {liveOnly.map((m) => (
-                  <MatchRow key={m.fid} href={`/live/${m.fid}`} m={m} live />
+                  <MatchRow key={m.fid} href={`/live/${m.fid}`} m={m} live played={played.includes(m.fid)} />
                 ))}
               </div>
             </section>
@@ -95,7 +97,7 @@ export default function Lobby() {
               <div className="grid sm:grid-cols-2 gap-3">
                 {archived === null && <div className="text-muted text-sm">loading…</div>}
                 {allArchived.map((m) => (
-                  <MatchRow key={m.fid} href={`/match/${m.fid}`} m={m} thriller={m.goals >= 4} sub={`${m.minutes}' · World Cup`} />
+                  <MatchRow key={m.fid} href={`/match/${m.fid}`} m={m} thriller={m.goals >= 4} sub={`${m.minutes}' · World Cup`} played={played.includes(m.fid)} />
                 ))}
               </div>
             </section>
@@ -199,9 +201,9 @@ function HeroMatch({ fix, arch }: { fix?: Fixture; arch?: Archived }) {
   return <div className="rounded-3xl hero-bg border border-white/10 p-10 text-center text-muted">loading matches…</div>;
 }
 
-function MatchRow({ href, m, live, thriller, sub }: { href: string; m: { p1: string; p2: string; iso1: string; iso2: string }; live?: boolean; thriller?: boolean; sub?: string }) {
-  return (
-    <Link href={href} className={`card-surface rounded-2xl p-4 flex items-center justify-between transition ${live ? "border-destructive/30 hover:border-destructive/60" : "hover:border-primary/40"}`}>
+function MatchRow({ href, m, live, thriller, sub, played }: { href: string; m: { p1: string; p2: string; iso1: string; iso2: string }; live?: boolean; thriller?: boolean; sub?: string; played?: boolean }) {
+  const body = (
+    <>
       <div className="flex items-center gap-2.5 min-w-0">
         <Flag iso={m.iso1} alt={m.p1} />
         <span className="font-bold truncate">{m.p1}</span>
@@ -210,10 +212,29 @@ function MatchRow({ href, m, live, thriller, sub }: { href: string; m: { p1: str
         <Flag iso={m.iso2} alt={m.p2} />
       </div>
       <div className="text-right shrink-0 pl-3">
-        {live && <span className="text-destructive text-xs font-bold animate-pulse">● LIVE</span>}
-        {thriller && <div className="text-primary text-xs font-bold">🔥 thriller</div>}
-        {sub && <div className="text-muted text-[11px]">{sub}</div>}
+        {played ? (
+          <span className="text-muted text-xs font-bold">✓ played</span>
+        ) : (
+          <>
+            {live && <span className="text-destructive text-xs font-bold animate-pulse">● LIVE</span>}
+            {thriller && <div className="text-primary text-xs font-bold">🔥 thriller</div>}
+            {sub && <div className="text-muted text-[11px]">{sub}</div>}
+          </>
+        )}
       </div>
+    </>
+  );
+  // One-shot-per-match: a played match is no longer clickable.
+  if (played) {
+    return (
+      <div className="card-surface rounded-2xl p-4 flex items-center justify-between opacity-50 cursor-not-allowed" title="You've already played this match">
+        {body}
+      </div>
+    );
+  }
+  return (
+    <Link href={href} className={`card-surface rounded-2xl p-4 flex items-center justify-between transition ${live ? "border-destructive/30 hover:border-destructive/60" : "hover:border-primary/40"}`}>
+      {body}
     </Link>
   );
 }
