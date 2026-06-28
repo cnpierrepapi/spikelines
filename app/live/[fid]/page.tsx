@@ -151,7 +151,7 @@ export default function LiveMatch() {
           setTimeout(() => setPrompt((cur) => (cur && cur.id === p.id && !cur.answered ? null : cur)), 5000);
         }
       } else if (ev.t === "score") {
-        setScore(ev.score);
+        setScore((s) => ({ p1: Math.max(s.p1, ev.score.p1), p2: Math.max(s.p2, ev.score.p2) }));
       } else if (ev.t === "stat") {
         const side: 1 | 2 = ev.side === 2 ? 2 : 1;
         if (ev.kind === "goal") addEvent("⚽", `Goal — ${teamName(side)}`);

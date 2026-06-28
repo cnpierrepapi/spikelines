@@ -72,14 +72,23 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
 
         let clock: any, clockTs = -1;
         let possRec: any, possTs = -1;
-        let scoreRec: any, scoreTs = -1;
+        let anyScore = false;
+        const cur = { g1: 0, g2: 0, c1: 0, c2: 0, y1: 0, y2: 0, r1: 0, r2: 0 };
         let chanceRec: any, chanceTs = -1;
         let shotRec: any, shotTs = -1;
         let penTs = -1, varTs = -1, subRec: any, subTs = -1;
         for (const rr of arr) {
           if (rr.Clock && rr.Ts > clockTs) { clock = rr.Clock; clockTs = rr.Ts; }
           if (POSS[rr.Action as string] && rr.Ts > possTs) { possRec = rr; possTs = rr.Ts; }
-          if (rr.Score && rr.Ts > scoreTs) { scoreRec = rr; scoreTs = rr.Ts; }
+          // Cumulative stats only increase — take the MAX across ALL records, since
+          // any single record's Score.Total can omit stats that haven't moved.
+          if (rr.Score) {
+            anyScore = true;
+            cur.g1 = Math.max(cur.g1, tot(rr.Score, "Participant1", "Goals")); cur.g2 = Math.max(cur.g2, tot(rr.Score, "Participant2", "Goals"));
+            cur.c1 = Math.max(cur.c1, tot(rr.Score, "Participant1", "Corners")); cur.c2 = Math.max(cur.c2, tot(rr.Score, "Participant2", "Corners"));
+            cur.y1 = Math.max(cur.y1, tot(rr.Score, "Participant1", "YellowCards")); cur.y2 = Math.max(cur.y2, tot(rr.Score, "Participant2", "YellowCards"));
+            cur.r1 = Math.max(cur.r1, tot(rr.Score, "Participant1", "RedCards")); cur.r2 = Math.max(cur.r2, tot(rr.Score, "Participant2", "RedCards"));
+          }
           if (TRIGGER[rr.Action as string] && rr.Ts > chanceTs) { chanceRec = rr; chanceTs = rr.Ts; }
           if (rr.Action === "shot" && rr.Ts > shotTs) { shotRec = rr; shotTs = rr.Ts; }
           if (rr.Action === "penalty" && rr.Ts > penTs) penTs = rr.Ts;
@@ -87,15 +96,8 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
           if (rr.Action === "substitution" && rr.Ts > subTs) { subRec = rr; subTs = rr.Ts; }
         }
 
-        // Scoreboard + per-side stat deltas (each Score record carries full totals).
-        if (scoreRec) {
-          const S = scoreRec.Score;
-          const cur = {
-            g1: tot(S, "Participant1", "Goals"), g2: tot(S, "Participant2", "Goals"),
-            c1: tot(S, "Participant1", "Corners"), c2: tot(S, "Participant2", "Corners"),
-            y1: tot(S, "Participant1", "YellowCards"), y2: tot(S, "Participant2", "YellowCards"),
-            r1: tot(S, "Participant1", "RedCards"), r2: tot(S, "Participant2", "RedCards"),
-          };
+        // Scoreboard + per-side stat deltas.
+        if (anyScore) {
           send({ t: "score", score: { p1: cur.g1, p2: cur.g2 }, clock });
           if (prev.started) {
             if (cur.g1 > prev.g1) send({ t: "stat", kind: "goal", side: 1, clock });

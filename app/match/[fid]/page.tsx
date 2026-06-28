@@ -224,13 +224,15 @@ export default function ReplayMatch() {
 
       // goals / cards / corners via cumulative-total deltas
       if (r.Score) {
-        const cur = {
-          g1: tot(r.Score, "Participant1", "Goals"), g2: tot(r.Score, "Participant2", "Goals"),
-          c1: tot(r.Score, "Participant1", "Corners"), c2: tot(r.Score, "Participant2", "Corners"),
-          y1: tot(r.Score, "Participant1", "YellowCards"), y2: tot(r.Score, "Participant2", "YellowCards"),
-          r1: tot(r.Score, "Participant1", "RedCards"), r2: tot(r.Score, "Participant2", "RedCards"),
-        };
+        // Cumulative stats only increase — never let a record with a partial
+        // Score.Total drop the running tally.
         const pc = prev.current;
+        const cur = {
+          g1: Math.max(pc.g1, tot(r.Score, "Participant1", "Goals")), g2: Math.max(pc.g2, tot(r.Score, "Participant2", "Goals")),
+          c1: Math.max(pc.c1, tot(r.Score, "Participant1", "Corners")), c2: Math.max(pc.c2, tot(r.Score, "Participant2", "Corners")),
+          y1: Math.max(pc.y1, tot(r.Score, "Participant1", "YellowCards")), y2: Math.max(pc.y2, tot(r.Score, "Participant2", "YellowCards")),
+          r1: Math.max(pc.r1, tot(r.Score, "Participant1", "RedCards")), r2: Math.max(pc.r2, tot(r.Score, "Participant2", "RedCards")),
+        };
         const n1 = entryRef.current?.p1 ?? "Home";
         const n2 = entryRef.current?.p2 ?? "Away";
         if (cur.g1 > pc.g1) { addEvent("⚽", `Goal — ${n1}`); settle({ kind: "goal", side: 1 }); }
