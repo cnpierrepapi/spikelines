@@ -32,12 +32,12 @@ doc.moveDown(0.3);
 
 h1("3. Scoring & leaderboard");
 p("The leaderboard ranks by streak accuracy, not raw winnings. Each played match contributes the ratio of the maximum streak reached to the number of calls made; the score is the sum of those ratios times 100.");
-p("Example: Match A — 40 max streak over 80 calls = 0.50. Match B — 20 max streak over 50 calls = 0.25. Score = (0.50 + 0.25) x 100 = 75.");
-p("Scoring on accuracy (a ratio) rather than volume or absolute streak keeps players who buy more entries from dominating purely by quantity.");
+p("Example: Match A — 40 max streak over 80 calls = 50 pts. Match B — 20 max streak over 50 calls = 25 pts. Score = 75.");
+p("Anti-farming: a match's points are capped at 35 unless at least 14 calls were made in it, so a few lucky calls on a tiny sample cannot post a high accuracy. Scoring on accuracy (a ratio) rather than volume keeps players who buy more entries from dominating purely by quantity.");
 
 h1("4. SPIKES economy & monetization");
 li("SPIKES are earned by correct calls (and a once-per-run bonus at a 5-streak: 25 archived / 50 live) or bought in USDC packs.");
-li("SPIKES sink: 'streak-save' — when a wrong call would end an active streak, the player can spend SPIKES to keep it. Cost escalates per use each day (100, 200, 400, ...).");
+li("SPIKES sink: 'streak-save' — when a wrong call would end an active streak, the player can spend SPIKES to keep it. Cost escalates per use each day (25, 50, 125, 150, then capped at 175).");
 li("$5 USDC = a fully-unlocked user slot (live stat overlay + leaderboard entry). One wallet may hold N user slots, N = floor(USD paid / 5) — breadth, not bankroll.");
 li("SPIKES never buy a bigger bankroll or better prize odds (equal-footing; everyone plays the same stake). SPIKES packs are 100% revenue; USDC reward pools are funded by a discretionary allocation.");
 li("Revenue = the $5 unlocks + SPIKES pack sales. TxLINE API volume is a cost, not a revenue line.");

@@ -21,7 +21,7 @@ const TIER: Record<Tier, { reach: number; color: string; label: string }> = {
   high_danger: { reach: 44, color: "#ff5a67", label: "HIGH DANGER" },
 };
 const RING = 2 * Math.PI * 26;
-const LIVE_REWARD = 100; // SPIKES per correct call on live matches
+const LIVE_REWARD = 85; // SPIKES per correct call on live matches
 const PROMPT_COOLDOWN = 45; // match-seconds between routine prompts
 const HIGH_COOLDOWN = 15; // high-danger bypasses the routine cooldown (always call a real chance)
 const STREAK_MILESTONE = 5; // streak length that awards a bonus

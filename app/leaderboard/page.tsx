@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { getGames, leaderboardScore, getBalance, type GameStat } from "@/lib/store";
+import { getGames, leaderboardScore, gamePoints, getBalance, MIN_BETS_FOR_HIGH, LOW_SAMPLE_CAP, type GameStat } from "@/lib/store";
 
 // Seeded rivals so the board reads like a ranking until the real cross-user
 // backend lands. The signed-in player is inserted by their real local score.
@@ -51,7 +51,7 @@ export default function Leaderboard() {
       <main className="app-container py-8 max-w-2xl">
         <h1 className="text-3xl font-black mb-1">Leaderboard</h1>
         <p className="text-muted text-sm mb-2">Ranked by <span className="text-foreground font-semibold">streak accuracy</span> — top performers share the weekly USDC pool.</p>
-        <p className="text-muted text-xs mb-6 font-mono">score = Σ (max streak ÷ calls) per match × 100 &nbsp;·&nbsp; e.g. 40/80 + 20/50 = 0.75 → 75</p>
+        <p className="text-muted text-xs mb-6 font-mono">score = Σ (max streak ÷ calls × 100) per match &nbsp;·&nbsp; e.g. 40/80 + 20/50 = 50 + 25 = 75 &nbsp;·&nbsp; matches with &lt;{MIN_BETS_FOR_HIGH} calls cap at {LOW_SAMPLE_CAP} pts</p>
 
         {/* Your score + per-match breakdown */}
         <div className="card-surface rounded-2xl p-5 mb-6">
@@ -69,12 +69,17 @@ export default function Leaderboard() {
             <p className="text-muted text-sm">No matches yet — <Link href="/play" className="text-primary font-bold">play one</Link> to get on the board.</p>
           ) : (
             <div className="flex flex-col gap-1.5">
-              {games.map((g) => (
-                <div key={g.fid} className="flex items-center justify-between text-sm">
-                  <span className="text-foreground truncate pr-2">{g.match}</span>
-                  <span className="text-muted font-mono shrink-0">{g.maxStreak}/{g.bets} = {g.bets ? (g.maxStreak / g.bets).toFixed(2) : "0.00"}</span>
-                </div>
-              ))}
+              {games.map((g) => {
+                const capped = g.bets < MIN_BETS_FOR_HIGH && (g.bets ? (g.maxStreak / g.bets) * 100 : 0) > LOW_SAMPLE_CAP;
+                return (
+                  <div key={g.fid} className="flex items-center justify-between text-sm">
+                    <span className="text-foreground truncate pr-2">{g.match}</span>
+                    <span className="text-muted font-mono shrink-0">
+                      {g.maxStreak}/{g.bets} → <span className="text-foreground">{Math.round(gamePoints(g))} pts</span>{capped && <span className="text-destructive"> (cap, &lt;{MIN_BETS_FOR_HIGH})</span>}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

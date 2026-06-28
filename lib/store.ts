@@ -20,8 +20,8 @@ const PLAYED_KEY = "spikes_played";
 const PAID_KEY = "spikes_paid";
 const SAVES_PREFIX = "spikes_saves_"; // + YYYY-MM-DD
 
-const STREAK_SAVE_BASE = 100; // first save of the day costs this…
-const STREAK_SAVE_GROWTH = 2; // …then doubles per save that day
+// Cost of each streak-save through the day; the last value caps all further saves.
+const STREAK_SAVE_SCHEDULE = [25, 50, 125, 150, 175];
 
 const has = () => typeof window !== "undefined";
 const dayKey = () => SAVES_PREFIX + new Date().toISOString().slice(0, 10);
@@ -90,9 +90,10 @@ export function streakSavesToday(): number {
   if (!has()) return 0;
   return Number(localStorage.getItem(dayKey()) || 0);
 }
-// Cost of the NEXT streak-save today: base, then doubling each use.
+// Cost of the NEXT streak-save today: walks the schedule, then caps at the last.
 export function streakSaveCost(): number {
-  return STREAK_SAVE_BASE * Math.pow(STREAK_SAVE_GROWTH, streakSavesToday());
+  const n = streakSavesToday();
+  return STREAK_SAVE_SCHEDULE[Math.min(n, STREAK_SAVE_SCHEDULE.length - 1)];
 }
 // Try to save a streak: spends the current cost, increments today's counter.
 export function buyStreakSave(): { ok: boolean; cost: number } {
@@ -103,8 +104,12 @@ export function buyStreakSave(): { ok: boolean; cost: number } {
 }
 
 // ── per-game stats → leaderboard ──────────────────────────────────
-// Each played match contributes maxStreak/bets; the score sums those ratios ×100.
-// e.g. game1 40/80=0.5 + game2 20/50=0.25 → 0.75 → score 75.
+// Each played match contributes (maxStreak/bets)×100 points; the score sums them.
+// e.g. game1 40/80=50 + game2 20/50=25 → 75.
+// Anti-farming: a match's points are CAPPED at 35 unless ≥14 calls were made in it
+// (so a few lucky calls on a tiny sample can't post a high accuracy).
+export const MIN_BETS_FOR_HIGH = 14;
+export const LOW_SAMPLE_CAP = 35;
 export type GameStat = { fid: number; match: string; maxStreak: number; bets: number };
 const GAMES_KEY = "spikes_games";
 
@@ -123,7 +128,12 @@ export function recordGameStats(fid: number, match: string, maxStreak: number, b
   games.push({ fid, match, maxStreak, bets });
   localStorage.setItem(GAMES_KEY, JSON.stringify(games));
 }
+// Points one match contributes (0–100), with the low-sample cap applied.
+export function gamePoints(g: GameStat): number {
+  if (g.bets <= 0) return 0;
+  const raw = (g.maxStreak / g.bets) * 100;
+  return g.bets >= MIN_BETS_FOR_HIGH ? raw : Math.min(raw, LOW_SAMPLE_CAP);
+}
 export function leaderboardScore(games: GameStat[] = getGames()): number {
-  const ratio = games.reduce((s, g) => (g.bets > 0 ? s + g.maxStreak / g.bets : s), 0);
-  return Math.round(ratio * 100);
+  return Math.round(games.reduce((s, g) => s + gamePoints(g), 0));
 }

@@ -39,7 +39,7 @@ const TRIGGER: Record<string, Trigger> = {
   free_kick: "free_kick",
 };
 const RING = 2 * Math.PI * 26;
-const ARCHIVED_REWARD = 5; // SPIKES per correct call on archived matches
+const ARCHIVED_REWARD = 20; // SPIKES per correct call on archived matches
 const PROMPT_COOLDOWN = 45; // match-seconds between routine prompts
 const HIGH_COOLDOWN = 15; // high-danger bypasses the routine cooldown
 const STREAK_MILESTONE = 5; // streak length that awards a bonus
