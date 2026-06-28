@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { recordBet, addBalance, hasPlayed, markPlayed } from "@/lib/store";
+import { recordBet, addBalance, hasPlayed, markPlayed, getBalance, streakSaveCost, buyStreakSave } from "@/lib/store";
 import { celebrateFrom } from "@/lib/celebrate";
 import { type MarketKind, type Side, type Trigger, sideOf, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
@@ -42,6 +42,8 @@ const RING = 2 * Math.PI * 26;
 const ARCHIVED_REWARD = 5; // SPIKES per correct call on archived matches
 const PROMPT_COOLDOWN = 45; // match-seconds between routine prompts
 const HIGH_COOLDOWN = 15; // high-danger bypasses the routine cooldown
+const STREAK_MILESTONE = 5; // streak length that awards a bonus
+const STREAK_BONUS = 25; // archived bonus SPIKES at the milestone (live = 50)
 const fmtClock = (c?: Clock) =>
   c ? `${String(Math.floor(c.Seconds / 60)).padStart(2, "0")}:${String(c.Seconds % 60).padStart(2, "0")}` : "00:00";
 const tot = (score: any, p: string, k: string) => score?.[p]?.Total?.[k] ?? 0;
@@ -67,11 +69,16 @@ export default function ReplayMatch() {
   const [justWon, setJustWon] = useState<number[]>([]);
   const [graduated, setGraduated] = useState(false);
   const [blocked, setBlocked] = useState(false); // one-shot: already played this match
+  const [saveOffer, setSaveOffer] = useState<{ cost: number; streak: number } | null>(null);
 
   // Decide on mount only, so marking-as-played mid-game doesn't block the session.
   useEffect(() => {
     if (hasPlayed(fid)) setBlocked(true);
   }, [fid]);
+  // SPIKES shown = the persistent wallet balance (so spends/earns are real).
+  useEffect(() => {
+    setSpotr(getBalance());
+  }, []);
 
   const recs = useRef<Rec[]>([]);
   const ptr = useRef(0);
@@ -88,6 +95,11 @@ export default function ReplayMatch() {
   const eventsRef = useRef<{ id: number; icon: string; label: string; min: number }[]>([]);
   const entryRef = useRef<Entry | null>(null);
   entryRef.current = entry;
+  const streakRef = useRef(0);
+  streakRef.current = streak;
+  const saveOfferRef = useRef<{ cost: number; streak: number } | null>(null);
+  saveOfferRef.current = saveOffer;
+  const bonusAwarded = useRef(false);
 
   const teamName = useCallback((side: 1 | 2) => (side === 2 ? entryRef.current?.p2 : entryRef.current?.p1) ?? (side === 2 ? "Away" : "Home"), []);
 
@@ -95,9 +107,24 @@ export default function ReplayMatch() {
     if (win) {
       setSpotr((v) => v + ARCHIVED_REWARD);
       setStreak((k) => k + 1);
-    } else {
-      setStreak(0);
+    } else if (streakRef.current > 0 && !saveOfferRef.current) {
+      // A wrong call would end the streak → offer to save it (don't reset yet).
+      setSaveOffer({ cost: streakSaveCost(), streak: streakRef.current });
+      paused.current = true; // freeze the replay for the decision
     }
+  }, []);
+
+  const saveStreak = useCallback(() => {
+    const r = buyStreakSave();
+    if (r.ok) setSpotr((v) => v - r.cost); // streak kept; SPIKES spent
+    else setStreak(0); // couldn't afford → streak ends
+    setSaveOffer(null);
+    paused.current = false;
+  }, []);
+  const declineStreak = useCallback(() => {
+    setStreak(0);
+    setSaveOffer(null);
+    paused.current = false;
   }, []);
 
   // Settle open bets: a matching signal settles YES-as-win; elapsed window → NO-win.
@@ -133,8 +160,19 @@ export default function ReplayMatch() {
     setEvents(eventsRef.current.slice());
   }, []);
 
+  // Streak milestone: actually credit the bonus (was previously never awarded),
+  // once per streak run. Reset the flag when the streak breaks.
   useEffect(() => {
-    if (streak >= 7) setGraduated(true);
+    if (streak === 0) {
+      bonusAwarded.current = false;
+      return;
+    }
+    if (streak >= STREAK_MILESTONE && !bonusAwarded.current) {
+      bonusAwarded.current = true;
+      addBalance(STREAK_BONUS);
+      setSpotr((v) => v + STREAK_BONUS);
+      setGraduated(true);
+    }
   }, [streak]);
 
   const answer = useCallback(
@@ -408,13 +446,15 @@ export default function ReplayMatch() {
 
       {prompt && <PromptCard prompt={prompt} onAnswer={answer} />}
 
+      {saveOffer && <SaveStreakCard offer={saveOffer} balance={spotr} onSave={saveStreak} onDecline={declineStreak} />}
+
       {graduated && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 backdrop-blur-sm px-6" onClick={() => setGraduated(false)}>
           <div className="card-surface gold-glow rounded-2xl p-8 max-w-sm text-center animate-pop">
             <div className="text-5xl mb-3">👁️</div>
             <h2 className="text-2xl font-black mb-2">You&apos;ve got the eye</h2>
-            <p className="text-muted mb-5">7-streak. <span className="text-primary font-bold">500 SPIKES</span> is yours — claim it in Flashcalls.</p>
-            <button className="w-full py-3 rounded-xl bg-primary text-background font-black gold-glow">Claim 500 SPIKES →</button>
+            <p className="text-muted mb-5">{STREAK_MILESTONE}-streak! <span className="text-primary font-bold">+{STREAK_BONUS} SPIKES</span> credited. Ready for sharper calls?</p>
+            <a href="https://flashcalls.vercel.app" target="_blank" rel="noopener noreferrer" className="block w-full py-3 rounded-xl bg-primary text-background font-black gold-glow">Try Flashcalls →</a>
           </div>
         </div>
       )}
@@ -429,6 +469,27 @@ function Team({ name, iso, goals, active, right }: { name: string; iso?: string;
       {iso ? <img src={`/flags/${iso}.png`} alt={name} className="w-9 h-7 rounded object-cover ring-1 ring-white/10" /> : <div className="w-9 h-7 rounded bg-white/10" />}
       <span className={`text-sm font-bold truncate max-w-full ${active ? "text-primary" : "text-foreground"}`}>{name}</span>
       <span className="text-xs text-muted">{goals} goals</span>
+    </div>
+  );
+}
+
+function SaveStreakCard({ offer, balance, onSave, onDecline }: { offer: { cost: number; streak: number }; balance: number; onSave: () => void; onDecline: () => void }) {
+  const affordable = balance >= offer.cost;
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-40 flex justify-center px-4 pb-6 pointer-events-none">
+      <div className="w-full max-w-md card-surface gold-glow rounded-2xl p-5 animate-pop pointer-events-auto">
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-primary font-black uppercase tracking-wider text-sm">🔥 Save your {offer.streak}-streak?</span>
+          <span className="text-muted text-xs font-mono">{balance.toLocaleString()} SPIKES</span>
+        </div>
+        <p className="text-muted text-sm mb-4">A wrong call is about to end your streak. Spend <span className="text-primary font-bold">{offer.cost} SPIKES</span> to keep it alive — <span className="text-foreground">costs more each save today.</span></p>
+        <div className="grid grid-cols-2 gap-3">
+          <button onClick={onDecline} className="py-3 rounded-xl bg-white/5 border border-white/10 text-muted font-bold active:scale-95 transition">Let it go</button>
+          <button onClick={onSave} disabled={!affordable} className={`py-3 rounded-xl font-black active:scale-95 transition ${affordable ? "bg-primary text-background gold-glow" : "bg-white/5 border border-white/10 text-muted cursor-not-allowed"}`}>
+            {affordable ? `Save · ${offer.cost}` : "Not enough"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
