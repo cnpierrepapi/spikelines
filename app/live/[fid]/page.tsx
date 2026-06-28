@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { recordBet, addBalance, hasPlayed, markPlayed, getBalance, streakSaveCost, buyStreakSave, isPaid, setPaid as persistPaid } from "@/lib/store";
+import { recordBet, addBalance, hasPlayed, markPlayed, getBalance, streakSaveCost, buyStreakSave, isPaid, setPaid as persistPaid, recordGameStats } from "@/lib/store";
 import { celebrateFrom } from "@/lib/celebrate";
 import { type MarketKind, type Side, type Trigger, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
@@ -76,8 +76,13 @@ export default function LiveMatch() {
   saveOfferRef.current = saveOffer;
   const bonusAwarded = useRef(false);
   const statsRef = useRef({ s1: 0, s2: 0, poss1: 0, poss2: 0 });
+  const gameBetsRef = useRef(0);
+  const maxStreakRef = useRef(0);
 
   const teamName = useCallback((side: 1 | 2) => (side === 2 ? entryRef.current?.p2 : entryRef.current?.p1) ?? (side === 2 ? "Away" : "Home"), []);
+  const saveGame = useCallback(() => {
+    recordGameStats(fid, `${entryRef.current?.p1 ?? "?"}–${entryRef.current?.p2 ?? "?"}`, maxStreakRef.current, gameBetsRef.current);
+  }, [fid]);
 
   const addEvent = useCallback((icon: string, label: string) => {
     eventsRef.current = [{ id: Date.now() + Math.random(), icon, label, min: Math.floor(secRef.current / 60) }, ...eventsRef.current].slice(0, 12);
@@ -148,8 +153,10 @@ export default function LiveMatch() {
     betsRef.current = [bet, ...betsRef.current].slice(0, 12);
     setBets(betsRef.current.slice());
     markPlayed(fid); // first call consumes this match (one-shot-per-match)
+    gameBetsRef.current++;
+    saveGame();
     setTimeout(() => setPrompt((cur) => (cur && cur.id === p.id ? null : cur)), 1300);
-  }, [teamName, fid]);
+  }, [teamName, fid, saveGame]);
 
   // Streak milestone: actually credit the bonus, once per streak run.
   useEffect(() => {
@@ -157,13 +164,17 @@ export default function LiveMatch() {
       bonusAwarded.current = false;
       return;
     }
+    if (streak > maxStreakRef.current) {
+      maxStreakRef.current = streak;
+      saveGame();
+    }
     if (streak >= STREAK_MILESTONE && !bonusAwarded.current) {
       bonusAwarded.current = true;
       addBalance(STREAK_BONUS);
       setSpotr((v) => v + STREAK_BONUS);
       setGraduated(true);
     }
-  }, [streak]);
+  }, [streak, saveGame]);
 
   useEffect(() => {
     fetch("/api/live").then((r) => r.json()).then((d) => setEntry((d.matches ?? []).find((m: LiveEntry) => m.fid === fid) ?? null)).catch(() => {});
@@ -244,7 +255,7 @@ export default function LiveMatch() {
         <div className="text-5xl">✓</div>
         <p className="text-foreground font-bold text-lg">You&apos;ve already played this match.</p>
         <p className="text-muted text-sm max-w-xs">Each match can only be played once — pick another to keep building your streak.</p>
-        <Link href="/" className="text-primary font-bold mt-2">← back to matches</Link>
+        <Link href="/play" className="text-primary font-bold mt-2">← back to matches</Link>
       </div>
     );
   }
@@ -255,7 +266,7 @@ export default function LiveMatch() {
         <div className="lg:grid lg:grid-cols-3 lg:gap-6 max-w-md lg:max-w-none mx-auto">
           <div className="lg:col-span-2 flex flex-col gap-5">
             <div className="flex items-center justify-between">
-              <Link href="/" className="text-muted hover:text-foreground text-sm">← matches</Link>
+              <Link href="/play" className="text-muted hover:text-foreground text-sm">← matches</Link>
               <span className={`text-xs font-mono px-2 py-1 rounded-full border ${connected ? "text-destructive border-destructive/40" : "text-muted border-white/10"}`}>
                 {connected ? "● LIVE" : "connecting…"}
               </span>

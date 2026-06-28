@@ -101,3 +101,29 @@ export function buyStreakSave(): { ok: boolean; cost: number } {
   if (has()) localStorage.setItem(dayKey(), String(streakSavesToday() + 1));
   return { ok: true, cost };
 }
+
+// ── per-game stats → leaderboard ──────────────────────────────────
+// Each played match contributes maxStreak/bets; the score sums those ratios ×100.
+// e.g. game1 40/80=0.5 + game2 20/50=0.25 → 0.75 → score 75.
+export type GameStat = { fid: number; match: string; maxStreak: number; bets: number };
+const GAMES_KEY = "spikes_games";
+
+export function getGames(): GameStat[] {
+  if (!has()) return [];
+  try {
+    return JSON.parse(localStorage.getItem(GAMES_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+// Upsert one game's stats by fid (a match is played once, but this updates live).
+export function recordGameStats(fid: number, match: string, maxStreak: number, bets: number) {
+  if (!has()) return;
+  const games = getGames().filter((g) => g.fid !== fid);
+  games.push({ fid, match, maxStreak, bets });
+  localStorage.setItem(GAMES_KEY, JSON.stringify(games));
+}
+export function leaderboardScore(games: GameStat[] = getGames()): number {
+  const ratio = games.reduce((s, g) => (g.bets > 0 ? s + g.maxStreak / g.bets : s), 0);
+  return Math.round(ratio * 100);
+}
