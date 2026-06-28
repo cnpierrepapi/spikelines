@@ -58,7 +58,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
 
       // started=false so the first poll only seeds the baseline (no settle/prompt
       // events for things that happened before the viewer connected).
-      const prev = { g1: 0, g2: 0, c1: 0, c2: 0, y1: 0, y2: 0, r1: 0, r2: 0, possTs: 0, chanceTs: 0, shotTs: 0, penTs: 0, varTs: 0, started: false };
+      const prev = { g1: 0, g2: 0, c1: 0, c2: 0, y1: 0, y2: 0, r1: 0, r2: 0, possTs: 0, chanceTs: 0, shotTs: 0, penTs: 0, varTs: 0, subTs: 0, started: false };
 
       async function poll() {
         const res = await fetch(`${base}/api/scores/snapshot/${fid}`, {
@@ -75,7 +75,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
         let scoreRec: any, scoreTs = -1;
         let chanceRec: any, chanceTs = -1;
         let shotRec: any, shotTs = -1;
-        let penTs = -1, varTs = -1;
+        let penTs = -1, varTs = -1, subRec: any, subTs = -1;
         for (const rr of arr) {
           if (rr.Clock && rr.Ts > clockTs) { clock = rr.Clock; clockTs = rr.Ts; }
           if (POSS[rr.Action as string] && rr.Ts > possTs) { possRec = rr; possTs = rr.Ts; }
@@ -84,6 +84,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
           if (rr.Action === "shot" && rr.Ts > shotTs) { shotRec = rr; shotTs = rr.Ts; }
           if (rr.Action === "penalty" && rr.Ts > penTs) penTs = rr.Ts;
           if (rr.Action === "var" && rr.Ts > varTs) varTs = rr.Ts;
+          if (rr.Action === "substitution" && rr.Ts > subTs) { subRec = rr; subTs = rr.Ts; }
         }
 
         // Scoreboard + per-side stat deltas (each Score record carries full totals).
@@ -127,9 +128,10 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
           prev.chanceTs = chanceTs;
         }
 
-        // Highlights ticker — penalty / VAR.
+        // Highlights ticker — penalty / VAR / substitution.
         if (penTs > prev.penTs) { if (prev.started) send({ t: "feed", kind: "penalty", clock }); prev.penTs = penTs; }
         if (varTs > prev.varTs) { if (prev.started) send({ t: "feed", kind: "var", clock }); prev.varTs = varTs; }
+        if (subTs > prev.subTs) { if (prev.started) send({ t: "feed", kind: "sub", side: subRec?.Data?.Participant === 2 ? 2 : 1, clock }); prev.subTs = subTs; }
         prev.started = true;
       }
 

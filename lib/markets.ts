@@ -36,21 +36,19 @@ export function pickMarket(trigger: Trigger, side: 1 | 2, rng: () => number = Ma
 
 // Per-market answer window (minutes), calibrated so neither YES nor NO is a
 // near-certainty given each stat's real rate (~goals rare, shots frequent).
-// Live matches use SHORTER windows (2–4 min) so calls resolve while you watch.
 const WINDOWS: Record<MarketKind, number[]> = {
   goal: [4, 5, 6, 7, 8, 10],
   corner: [4, 5, 6, 7, 8],
   shot: [1, 2, 3],
   booking: [6, 8, 10, 12],
 };
-const WINDOWS_LIVE: Record<MarketKind, number[]> = {
-  goal: [2, 3, 4, 5],
-  corner: [2, 3, 4],
-  shot: [1, 2, 3],
-  booking: [3, 4, 5],
-};
 export function pickWindow(kind: MarketKind, live = false, rng: () => number = Math.random): number {
-  const arr = (live ? WINDOWS_LIVE : WINDOWS)[kind];
+  // Live: keep it snappy — 8 of 10 calls resolve in 2–4 min, occasionally longer.
+  if (live) {
+    const arr = rng() < 0.8 ? [2, 3, 4] : [5, 6];
+    return arr[Math.floor(rng() * arr.length)];
+  }
+  const arr = WINDOWS[kind];
   return arr[Math.floor(rng() * arr.length)];
 }
 

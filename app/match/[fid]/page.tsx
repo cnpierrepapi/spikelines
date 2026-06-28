@@ -16,6 +16,7 @@ type Rec = {
   Participant?: number;
   Participant1Id?: number;
   Participant2Id?: number;
+  Data?: { Participant?: number };
   Ts?: number;
 };
 type Entry = { fid: number; p1: string; p2: string; iso1: string; iso2: string; minutes: number };
@@ -122,7 +123,7 @@ export default function ReplayMatch() {
   );
 
   const addEvent = useCallback((icon: string, label: string) => {
-    eventsRef.current = [{ id: Date.now() + Math.random(), icon, label, min: Math.floor(secRef.current / 60) }, ...eventsRef.current].slice(0, 8);
+    eventsRef.current = [{ id: Date.now() + Math.random(), icon, label, min: Math.floor(secRef.current / 60) }, ...eventsRef.current].slice(0, 12);
     setEvents(eventsRef.current.slice());
   }, []);
 
@@ -216,9 +217,10 @@ export default function ReplayMatch() {
         }, 5000);
       }
 
-      if (r.Action === "shot") settle({ kind: "shot", side: sideOf(r.Participant) });
-      else if (r.Action === "penalty") addEvent("🎯", "Penalty awarded");
+      if (r.Action === "shot") { addEvent("👟", `Shot — ${teamName(sideOf(r.Participant))}`); settle({ kind: "shot", side: sideOf(r.Participant) }); }
+      else if (r.Action === "penalty") addEvent("🥅", "Penalty awarded");
       else if (r.Action === "var") addEvent("📺", "VAR review");
+      else if (r.Action === "substitution") addEvent("🔄", `Substitution${r.Data?.Participant ? ` — ${teamName(r.Data.Participant === 2 ? 2 : 1)}` : ""}`);
 
       // goals / cards / corners via cumulative-total deltas
       if (r.Score) {
@@ -233,8 +235,8 @@ export default function ReplayMatch() {
         const n2 = entryRef.current?.p2 ?? "Away";
         if (cur.g1 > pc.g1) { addEvent("⚽", `Goal — ${n1}`); settle({ kind: "goal", side: 1 }); }
         if (cur.g2 > pc.g2) { addEvent("⚽", `Goal — ${n2}`); settle({ kind: "goal", side: 2 }); }
-        if (cur.c1 > pc.c1) settle({ kind: "corner", side: 1 });
-        if (cur.c2 > pc.c2) settle({ kind: "corner", side: 2 });
+        if (cur.c1 > pc.c1) { addEvent("🚩", `Corner — ${n1}`); settle({ kind: "corner", side: 1 }); }
+        if (cur.c2 > pc.c2) { addEvent("🚩", `Corner — ${n2}`); settle({ kind: "corner", side: 2 }); }
         if (cur.r1 > pc.r1) { addEvent("🟥", `Red card — ${n1}`); settle({ kind: "booking", side: 1 }); }
         if (cur.r2 > pc.r2) { addEvent("🟥", `Red card — ${n2}`); settle({ kind: "booking", side: 2 }); }
         if (cur.y1 > pc.y1) { addEvent("🟨", `Yellow — ${n1}`); settle({ kind: "booking", side: 1 }); }

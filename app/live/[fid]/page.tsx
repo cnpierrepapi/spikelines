@@ -58,7 +58,7 @@ export default function LiveMatch() {
   const teamName = useCallback((side: 1 | 2) => (side === 2 ? entryRef.current?.p2 : entryRef.current?.p1) ?? (side === 2 ? "Away" : "Home"), []);
 
   const addEvent = useCallback((icon: string, label: string) => {
-    eventsRef.current = [{ id: Date.now() + Math.random(), icon, label, min: Math.floor(secRef.current / 60) }, ...eventsRef.current].slice(0, 8);
+    eventsRef.current = [{ id: Date.now() + Math.random(), icon, label, min: Math.floor(secRef.current / 60) }, ...eventsRef.current].slice(0, 12);
     setEvents(eventsRef.current.slice());
   }, []);
 
@@ -155,15 +155,18 @@ export default function LiveMatch() {
       } else if (ev.t === "stat") {
         const side: 1 | 2 = ev.side === 2 ? 2 : 1;
         if (ev.kind === "goal") addEvent("⚽", `Goal — ${teamName(side)}`);
-        else if (ev.kind === "yellow") addEvent("🟨", `Yellow — ${teamName(side)}`);
+        else if (ev.kind === "corner") addEvent("🚩", `Corner — ${teamName(side)}`);
+        else if (ev.kind === "yellow") addEvent("🟨", `Yellow card — ${teamName(side)}`);
         else if (ev.kind === "red") addEvent("🟥", `Red card — ${teamName(side)}`);
         const sigKind: MarketKind = ev.kind === "yellow" || ev.kind === "red" ? "booking" : ev.kind;
         settle({ kind: sigKind, side });
       } else if (ev.t === "event") {
+        if (ev.kind === "shot") addEvent("👟", `Shot — ${teamName(ev.side === 2 ? 2 : 1)}`);
         settle({ kind: ev.kind, side: ev.side === 2 ? 2 : 1 });
       } else if (ev.t === "feed") {
-        if (ev.kind === "penalty") addEvent("🎯", "Penalty awarded");
+        if (ev.kind === "penalty") addEvent("🥅", "Penalty awarded");
         else if (ev.kind === "var") addEvent("📺", "VAR review");
+        else if (ev.kind === "sub") addEvent("🔄", `Substitution — ${teamName(ev.side === 2 ? 2 : 1)}`);
       }
       settle(null);
     };

@@ -7,7 +7,7 @@ import { iso } from "@/lib/iso";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const SLIM = (r: any) => ({ Action: r.Action, Score: r.Score, Clock: r.Clock, Participant: r.Participant, Participant1Id: r.Participant1Id, Participant2Id: r.Participant2Id, Ts: r.Ts, GameState: r.GameState });
+const SLIM = (r: any) => ({ Action: r.Action, Score: r.Score, Clock: r.Clock, Participant: r.Participant, Participant1Id: r.Participant1Id, Participant2Id: r.Participant2Id, Data: r.Data, Ts: r.Ts, GameState: r.GameState });
 
 function parseUpdates(text: string): any[] {
   const recs: any[] = [];
