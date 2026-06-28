@@ -23,6 +23,7 @@ function kickoff(ms: number) {
 
 export default function Lobby() {
   const [archived, setArchived] = useState<Archived[] | null>(null);
+  const [runtimeArch, setRuntimeArch] = useState<Archived[]>([]);
   const [live, setLive] = useState<Live[] | null>(null);
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [balance, setBalance] = useState(0);
@@ -30,17 +31,23 @@ export default function Lobby() {
 
   useEffect(() => {
     fetch("/replays/index.json").then((r) => r.json()).then(setArchived).catch(() => setArchived([]));
+    fetch("/api/archived").then((r) => r.json()).then((d) => setRuntimeArch(d.matches ?? [])).catch(() => setRuntimeArch([]));
     fetch("/api/live").then((r) => r.json()).then((d) => setLive(d.matches ?? [])).catch(() => setLive([]));
     fetch("/api/fixtures").then((r) => r.json()).then((d) => setFixtures(d.fixtures ?? [])).catch(() => setFixtures([]));
     setBalance(getBalance());
     setRecent(getBets().slice(0, 8));
   }, []);
 
-  const heroFix = fixtures[0];
-  const heroArch = archived?.[0];
+  // Archived = curated static replays + recently-finished matches (runtime),
+  // de-duplicated (static wins).
+  const staticFids = new Set((archived ?? []).map((a) => a.fid));
+  const allArchived = [...(archived ?? []), ...runtimeArch.filter((m) => !staticFids.has(m.fid))];
 
-  // A finished match we've recorded lives in Archived — don't also show it as Live.
-  const archivedFids = new Set((archived ?? []).map((a) => a.fid));
+  const heroFix = fixtures[0];
+  const heroArch = allArchived[0];
+
+  // A finished match lives in Archived — don't also show it as Live.
+  const archivedFids = new Set(allArchived.map((a) => a.fid));
   const liveOnly = (live ?? []).filter((m) => !archivedFids.has(m.fid));
 
   return (
@@ -87,7 +94,7 @@ export default function Lobby() {
               </div>
               <div className="grid sm:grid-cols-2 gap-3">
                 {archived === null && <div className="text-muted text-sm">loading…</div>}
-                {archived?.map((m) => (
+                {allArchived.map((m) => (
                   <MatchRow key={m.fid} href={`/match/${m.fid}`} m={m} thriller={m.goals >= 4} sub={`${m.minutes}' · World Cup`} />
                 ))}
               </div>

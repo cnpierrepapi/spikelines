@@ -58,7 +58,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
 
       // started=false so the first poll only seeds the baseline (no settle/prompt
       // events for things that happened before the viewer connected).
-      const prev = { g1: 0, g2: 0, c1: 0, c2: 0, y1: 0, y2: 0, r1: 0, r2: 0, possTs: 0, chanceTs: 0, shotTs: 0, started: false };
+      const prev = { g1: 0, g2: 0, c1: 0, c2: 0, y1: 0, y2: 0, r1: 0, r2: 0, possTs: 0, chanceTs: 0, shotTs: 0, penTs: 0, varTs: 0, started: false };
 
       async function poll() {
         const res = await fetch(`${base}/api/scores/snapshot/${fid}`, {
@@ -75,12 +75,15 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
         let scoreRec: any, scoreTs = -1;
         let chanceRec: any, chanceTs = -1;
         let shotRec: any, shotTs = -1;
+        let penTs = -1, varTs = -1;
         for (const rr of arr) {
           if (rr.Clock && rr.Ts > clockTs) { clock = rr.Clock; clockTs = rr.Ts; }
           if (POSS[rr.Action as string] && rr.Ts > possTs) { possRec = rr; possTs = rr.Ts; }
           if (rr.Score && rr.Ts > scoreTs) { scoreRec = rr; scoreTs = rr.Ts; }
           if (TRIGGER[rr.Action as string] && rr.Ts > chanceTs) { chanceRec = rr; chanceTs = rr.Ts; }
           if (rr.Action === "shot" && rr.Ts > shotTs) { shotRec = rr; shotTs = rr.Ts; }
+          if (rr.Action === "penalty" && rr.Ts > penTs) penTs = rr.Ts;
+          if (rr.Action === "var" && rr.Ts > varTs) varTs = rr.Ts;
         }
 
         // Scoreboard + per-side stat deltas (each Score record carries full totals).
@@ -98,8 +101,10 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
             if (cur.g2 > prev.g2) send({ t: "stat", kind: "goal", side: 2, clock });
             if (cur.c1 > prev.c1) send({ t: "stat", kind: "corner", side: 1, clock });
             if (cur.c2 > prev.c2) send({ t: "stat", kind: "corner", side: 2, clock });
-            if (cur.y1 > prev.y1 || cur.r1 > prev.r1) send({ t: "stat", kind: "booking", side: 1, clock });
-            if (cur.y2 > prev.y2 || cur.r2 > prev.r2) send({ t: "stat", kind: "booking", side: 2, clock });
+            if (cur.y1 > prev.y1) send({ t: "stat", kind: "yellow", side: 1, clock });
+            if (cur.y2 > prev.y2) send({ t: "stat", kind: "yellow", side: 2, clock });
+            if (cur.r1 > prev.r1) send({ t: "stat", kind: "red", side: 1, clock });
+            if (cur.r2 > prev.r2) send({ t: "stat", kind: "red", side: 2, clock });
           }
           Object.assign(prev, cur);
         }
@@ -121,6 +126,10 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
           if (prev.started) send({ t: "chance", trigger: TRIGGER[chanceRec.Action as string], side: sideOf(chanceRec.Participant), clock });
           prev.chanceTs = chanceTs;
         }
+
+        // Highlights ticker — penalty / VAR.
+        if (penTs > prev.penTs) { if (prev.started) send({ t: "feed", kind: "penalty", clock }); prev.penTs = penTs; }
+        if (varTs > prev.varTs) { if (prev.started) send({ t: "feed", kind: "var", clock }); prev.varTs = varTs; }
         prev.started = true;
       }
 

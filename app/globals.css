@@ -67,6 +67,20 @@ body {
 .danger-glow {
   box-shadow: 0 0 70px rgba(255, 90, 103, 0.5);
 }
+@keyframes betWonFlash {
+  0% {
+    background: rgba(37, 209, 107, 0.35);
+    transform: scale(1.04);
+  }
+  100% {
+    background: rgba(37, 209, 107, 0);
+    transform: scale(1);
+  }
+}
+.bet-won-flash {
+  animation: betWonFlash 2.2s ease-out both;
+  box-shadow: 0 0 22px rgba(37, 209, 107, 0.35);
+}
 .gold-glow {
   box-shadow: 0 0 36px rgba(245, 200, 0, 0.28);
 }

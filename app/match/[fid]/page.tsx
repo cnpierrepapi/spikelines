@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { recordBet, addBalance } from "@/lib/store";
+import { celebrateFrom } from "@/lib/celebrate";
 import { type MarketKind, type Side, type Trigger, sideOf, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
 type Tier = "safe" | "attack" | "danger" | "high_danger";
@@ -38,7 +39,8 @@ const TRIGGER: Record<string, Trigger> = {
 };
 const RING = 2 * Math.PI * 26;
 const ARCHIVED_REWARD = 5; // SPIKES per correct call on archived matches
-const PROMPT_COOLDOWN = 45; // match-seconds between prompts
+const PROMPT_COOLDOWN = 45; // match-seconds between routine prompts
+const HIGH_COOLDOWN = 15; // high-danger bypasses the routine cooldown
 const fmtClock = (c?: Clock) =>
   c ? `${String(Math.floor(c.Seconds / 60)).padStart(2, "0")}:${String(c.Seconds % 60).padStart(2, "0")}` : "00:00";
 const tot = (score: any, p: string, k: string) => score?.[p]?.Total?.[k] ?? 0;
@@ -61,6 +63,7 @@ export default function ReplayMatch() {
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [bets, setBets] = useState<Bet[]>([]);
   const [events, setEvents] = useState<{ id: number; icon: string; label: string; min: number }[]>([]);
+  const [justWon, setJustWon] = useState<number[]>([]);
   const [graduated, setGraduated] = useState(false);
 
   const recs = useRef<Rec[]>([]);
@@ -69,6 +72,7 @@ export default function ReplayMatch() {
   const prev = useRef({ g1: 0, g2: 0, c1: 0, c2: 0, y1: 0, y2: 0, r1: 0, r2: 0 });
   const secRef = useRef(0);
   const cooldownSec = useRef(0);
+  const highCooldownSec = useRef(0);
   const promptRef = useRef<Prompt | null>(null);
   promptRef.current = prompt;
   const speedRef = useRef(1);
@@ -103,7 +107,13 @@ export default function ReplayMatch() {
         b.status = win ? "won" : "lost";
         applyResult(win);
         recordBet({ id: b.id, match: `${entryRef.current?.p1 ?? "?"}–${entryRef.current?.p2 ?? "?"}`, mins: b.mins, choice: b.choice, status: b.status, reward: win ? ARCHIVED_REWARD : 0, at: Date.now() });
-        if (win) addBalance(ARCHIVED_REWARD);
+        if (win) {
+          addBalance(ARCHIVED_REWARD);
+          const id = b.id;
+          celebrateFrom(`bet-${id}`);
+          setJustWon((j) => [...j, id]);
+          setTimeout(() => setJustWon((j) => j.filter((x) => x !== id)), 2400);
+        }
         changed = true;
       }
       if (changed) setBets(betsRef.current.slice());
@@ -136,20 +146,29 @@ export default function ReplayMatch() {
     [teamName]
   );
 
-  // Load match data
+  // Load match data: prefer the curated static archive, else fall back to the
+  // runtime replay endpoint (a finished match that was never pre-recorded).
   useEffect(() => {
     let on = true;
-    Promise.all([
-      fetch("/replays/index.json").then((r) => r.json()),
-      fetch(`/replays/${fid}.json`).then((r) => r.json()),
-    ])
-      .then(([idx, data]: [Entry[], Rec[]]) => {
-        if (!on) return;
-        setEntry(idx.find((e) => e.fid === fid) ?? null);
-        recs.current = data;
-        setLoaded(true);
-      })
-      .catch(() => setLoaded(true));
+    (async () => {
+      const idx: Entry[] = await fetch("/replays/index.json").then((r) => r.json()).catch(() => []);
+      let data: Rec[] | null = null;
+      let ent: Entry | null = idx.find((e) => e.fid === fid) ?? null;
+      const fileRes = await fetch(`/replays/${fid}.json`).catch(() => null);
+      if (fileRes && fileRes.ok) {
+        data = await fileRes.json();
+      } else {
+        const j = await fetch(`/api/replay/${fid}`).then((r) => r.json()).catch(() => null);
+        if (j && Array.isArray(j.recs) && j.recs.length) {
+          data = j.recs;
+          ent = ent ?? j.entry ?? null;
+        }
+      }
+      if (!on) return;
+      setEntry(ent);
+      recs.current = data ?? [];
+      setLoaded(true);
+    })();
     return () => {
       on = false;
     };
@@ -172,9 +191,11 @@ export default function ReplayMatch() {
         }
       }
 
-      // prompt trigger (attack / danger / high_danger / shot / free_kick)
+      // prompt trigger (attack / danger / high_danger / shot / free_kick).
+      // high_danger bypasses the routine cooldown so a sudden chance always asks.
       const trig = TRIGGER[r.Action as string];
-      if (trig && !promptRef.current && sec >= cooldownSec.current) {
+      const gate = trig === "high_danger" ? highCooldownSec.current : cooldownSec.current;
+      if (trig && !promptRef.current && sec >= gate) {
         const side = sideOf(r.Participant);
         const m = pickMarket(trig, side);
         const mins = pickWindow(m.kind);
@@ -183,6 +204,7 @@ export default function ReplayMatch() {
         setPrompt(p);
         paused.current = true; // freeze-frame for the call
         cooldownSec.current = sec + PROMPT_COOLDOWN;
+        highCooldownSec.current = sec + HIGH_COOLDOWN;
         setTimeout(() => {
           setPrompt((cur) => {
             if (cur && cur.id === p.id && !cur.answered) {
@@ -347,7 +369,7 @@ export default function ReplayMatch() {
               {bets.length === 0 && <span className="text-muted text-sm">no bets yet — tap YES / NO when a prompt fires.</span>}
               <div className="flex flex-col gap-2">
                 {bets.map((b) => (
-                  <div key={b.id} className="flex items-center justify-between text-sm gap-2">
+                  <div key={b.id} id={`bet-${b.id}`} className={`flex items-center justify-between text-sm gap-2 rounded-lg transition-all duration-300 ${justWon.includes(b.id) ? "bet-won-flash px-2 py-1 -mx-2" : ""}`}>
                     <span className="text-foreground truncate">
                       {b.label} · <span className={b.choice === "YES" ? "text-success font-bold" : "text-destructive font-bold"}>{b.choice}</span>
                     </span>

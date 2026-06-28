@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { recordBet, addBalance } from "@/lib/store";
+import { celebrateFrom } from "@/lib/celebrate";
 import { type MarketKind, type Side, type Trigger, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
 type Tier = "safe" | "attack" | "danger" | "high_danger";
@@ -11,6 +12,7 @@ type Clock = { Running: boolean; Seconds: number };
 type Prompt = { id: number; sec: number; mins: number; market: MarketKind; side: Side; question: string; answered: null | "YES" | "NO" };
 type Bet = { id: number; market: MarketKind; side: Side; mins: number; choice: "YES" | "NO"; deadlineSec: number; status: "open" | "won" | "lost"; label: string };
 type LiveEntry = { fid: number; p1: string; p2: string; iso1: string; iso2: string };
+type Evt = { id: number; icon: string; label: string; min: number };
 
 const TIER: Record<Tier, { reach: number; color: string; label: string }> = {
   safe: { reach: 6, color: "#2f5f99", label: "settled" },
@@ -20,7 +22,8 @@ const TIER: Record<Tier, { reach: number; color: string; label: string }> = {
 };
 const RING = 2 * Math.PI * 26;
 const LIVE_REWARD = 100; // SPIKES per correct call on live matches
-const PROMPT_COOLDOWN = 45; // match-seconds between prompts
+const PROMPT_COOLDOWN = 45; // match-seconds between routine prompts
+const HIGH_COOLDOWN = 15; // high-danger bypasses the routine cooldown (always call a real chance)
 const fmtClock = (c?: Clock) => (c ? `${String(Math.floor(c.Seconds / 60)).padStart(2, "0")}:${String(c.Seconds % 60).padStart(2, "0")}` : "00:00");
 
 export default function LiveMatch() {
@@ -38,17 +41,26 @@ export default function LiveMatch() {
   const [spotr, setSpotr] = useState(0);
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [bets, setBets] = useState<Bet[]>([]);
+  const [events, setEvents] = useState<Evt[]>([]);
+  const [justWon, setJustWon] = useState<number[]>([]);
   const [graduated, setGraduated] = useState(false);
 
   const promptRef = useRef<Prompt | null>(null);
   promptRef.current = prompt;
   const secRef = useRef(0);
   const cooldownSec = useRef(0);
+  const highCooldownSec = useRef(0);
   const betsRef = useRef<Bet[]>([]);
+  const eventsRef = useRef<Evt[]>([]);
   const entryRef = useRef<LiveEntry | null>(null);
   entryRef.current = entry;
 
   const teamName = useCallback((side: 1 | 2) => (side === 2 ? entryRef.current?.p2 : entryRef.current?.p1) ?? (side === 2 ? "Away" : "Home"), []);
+
+  const addEvent = useCallback((icon: string, label: string) => {
+    eventsRef.current = [{ id: Date.now() + Math.random(), icon, label, min: Math.floor(secRef.current / 60) }, ...eventsRef.current].slice(0, 8);
+    setEvents(eventsRef.current.slice());
+  }, []);
 
   const applyResult = useCallback((win: boolean) => {
     if (win) {
@@ -57,8 +69,8 @@ export default function LiveMatch() {
     } else setStreak(0);
   }, []);
 
-  // Settle open bets. A matching signal (goal/corner/shot/booking for the right
-  // side) settles YES-as-win; an elapsed window settles NO-as-win.
+  // Settle open bets. A matching signal settles YES-as-win (→ confetti from that
+  // bet's row); an elapsed window settles NO-as-win.
   const settle = useCallback(
     (signal: { kind: MarketKind; side: 1 | 2 } | null) => {
       const sec = secRef.current;
@@ -72,7 +84,13 @@ export default function LiveMatch() {
         b.status = win ? "won" : "lost";
         applyResult(win);
         recordBet({ id: b.id, match: `${entryRef.current?.p1 ?? "?"}–${entryRef.current?.p2 ?? "?"}`, mins: b.mins, choice: b.choice, status: b.status, reward: win ? LIVE_REWARD : 0, at: Date.now() });
-        if (win) addBalance(LIVE_REWARD);
+        if (win) {
+          addBalance(LIVE_REWARD);
+          const id = b.id;
+          celebrateFrom(`bet-${id}`);
+          setJustWon((j) => [...j, id]);
+          setTimeout(() => setJustWon((j) => j.filter((x) => x !== id)), 2400);
+        }
         changed = true;
       }
       if (changed) setBets(betsRef.current.slice());
@@ -115,29 +133,43 @@ export default function LiveMatch() {
         setAttacker(ev.participant);
       } else if (ev.t === "chance") {
         // Spike the meter to the attacking side, then offer a side-framed call.
+        // high_danger bypasses the routine cooldown so a sudden chance always asks.
         const trigger: Trigger = ev.trigger ?? "attack";
         const side: 1 | 2 = ev.side === 2 ? 2 : 1;
         setTier(trigger === "free_kick" || trigger === "shot" ? "danger" : (trigger as Tier));
         setAttacker(side);
-        if (!promptRef.current && secRef.current >= cooldownSec.current) {
+        const isHigh = trigger === "high_danger";
+        const gate = isHigh ? highCooldownSec.current : cooldownSec.current;
+        if (!promptRef.current && secRef.current >= gate) {
           const m = pickMarket(trigger, side);
-          const mins = pickWindow(m.kind);
+          const mins = pickWindow(m.kind, true); // live → shorter 2–4 min windows
           const qSide: 1 | 2 = m.side === 0 ? side : (m.side as 1 | 2);
           const p: Prompt = { id: Date.now(), sec: secRef.current, mins, market: m.kind, side: m.side, question: marketQuestion(m.kind, teamName(qSide), mins), answered: null };
           setPrompt(p);
           cooldownSec.current = secRef.current + PROMPT_COOLDOWN;
+          highCooldownSec.current = secRef.current + HIGH_COOLDOWN;
           setTimeout(() => setPrompt((cur) => (cur && cur.id === p.id && !cur.answered ? null : cur)), 5000);
         }
       } else if (ev.t === "score") {
         setScore(ev.score);
-      } else if (ev.t === "stat" || ev.t === "event") {
+      } else if (ev.t === "stat") {
+        const side: 1 | 2 = ev.side === 2 ? 2 : 1;
+        if (ev.kind === "goal") addEvent("⚽", `Goal — ${teamName(side)}`);
+        else if (ev.kind === "yellow") addEvent("🟨", `Yellow — ${teamName(side)}`);
+        else if (ev.kind === "red") addEvent("🟥", `Red card — ${teamName(side)}`);
+        const sigKind: MarketKind = ev.kind === "yellow" || ev.kind === "red" ? "booking" : ev.kind;
+        settle({ kind: sigKind, side });
+      } else if (ev.t === "event") {
         settle({ kind: ev.kind, side: ev.side === 2 ? 2 : 1 });
+      } else if (ev.t === "feed") {
+        if (ev.kind === "penalty") addEvent("🎯", "Penalty awarded");
+        else if (ev.kind === "var") addEvent("📺", "VAR review");
       }
       settle(null);
     };
     es.onerror = () => setConnected(false);
     return () => es.close();
-  }, [fid, settle, teamName]);
+  }, [fid, settle, teamName, addEvent]);
 
   const ti = TIER[tier];
   const pos = 50 + (attacker === 2 ? ti.reach : -ti.reach);
@@ -186,6 +218,21 @@ export default function LiveMatch() {
                 <span className="text-muted text-xs">SPIKES</span>
               </div>
             </div>
+
+            {events.length > 0 && (
+              <div className="card-surface rounded-2xl p-4">
+                <div className="text-xs uppercase tracking-widest text-muted mb-2">Match events</div>
+                <div className="flex flex-col gap-1.5">
+                  {events.map((e) => (
+                    <div key={e.id} className="flex items-center gap-2 text-sm">
+                      <span className="text-muted font-mono text-xs w-8">{e.min}&apos;</span>
+                      <span>{e.icon}</span>
+                      <span className="text-foreground">{e.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           <aside className="lg:col-span-1 mt-5 lg:mt-0">
@@ -194,7 +241,7 @@ export default function LiveMatch() {
               {bets.length === 0 && <span className="text-muted text-sm">no bets yet — tap YES / NO when a prompt fires.</span>}
               <div className="flex flex-col gap-2">
                 {bets.map((b) => (
-                  <div key={b.id} className="flex items-center justify-between text-sm gap-2">
+                  <div key={b.id} id={`bet-${b.id}`} className={`flex items-center justify-between text-sm gap-2 rounded-lg transition-all duration-300 ${justWon.includes(b.id) ? "bet-won-flash px-2 py-1 -mx-2" : ""}`}>
                     <span className="text-foreground truncate">
                       {b.label} · <span className={b.choice === "YES" ? "text-success font-bold" : "text-destructive font-bold"}>{b.choice}</span>
                     </span>
