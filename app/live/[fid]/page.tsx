@@ -109,6 +109,28 @@ export default function LiveMatch() {
     setSaveOffer(null);
   }, []);
 
+  // Full time: resolve any still-open bet whose window ran past the final whistle
+  // (event didn't happen → NO wins / YES loses).
+  const finalize = useCallback(() => {
+    let changed = false;
+    for (const b of betsRef.current) {
+      if (b.status !== "open") continue;
+      const win = b.choice === "NO";
+      b.status = win ? "won" : "lost";
+      recordBet({ id: b.id, match: `${entryRef.current?.p1 ?? "?"}–${entryRef.current?.p2 ?? "?"}`, mins: b.mins, choice: b.choice, status: b.status, reward: win ? LIVE_REWARD : 0, at: Date.now() });
+      if (win) {
+        addBalance(LIVE_REWARD);
+        setSpotr((v) => v + LIVE_REWARD);
+        const id = b.id;
+        celebrateFrom(`bet-${id}`);
+        setJustWon((j) => [...j, id]);
+        setTimeout(() => setJustWon((j) => j.filter((x) => x !== id)), 2400);
+      }
+      changed = true;
+    }
+    if (changed) setBets(betsRef.current.slice());
+  }, []);
+
   // Live can't pause, so a streak-save offer auto-declines after a short window.
   useEffect(() => {
     if (!saveOffer) return;
@@ -238,12 +260,14 @@ export default function LiveMatch() {
         if (ev.kind === "penalty") addEvent("🥅", "Penalty awarded");
         else if (ev.kind === "var") addEvent("📺", "VAR review");
         else if (ev.kind === "sub") addEvent("🔄", `Substitution — ${teamName(ev.side === 2 ? 2 : 1)}`);
+      } else if (ev.t === "finished") {
+        finalize(); // full time — resolve bets parked past FT
       }
       settle(null);
     };
     es.onerror = () => setConnected(false);
     return () => es.close();
-  }, [fid, settle, teamName, addEvent, blocked]);
+  }, [fid, settle, teamName, addEvent, blocked, finalize]);
 
   const ti = TIER[tier];
   const pos = 50 + (attacker === 2 ? ti.reach : -ti.reach);

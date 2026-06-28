@@ -137,6 +137,28 @@ export default function ReplayMatch() {
     paused.current = false;
   }, []);
 
+  // At full time, any still-open bet can't resolve via its window (no more match) —
+  // the event didn't happen, so NO wins / YES loses. Fixes bets parked ⏳ past FT.
+  const finalize = useCallback(() => {
+    let changed = false;
+    for (const b of betsRef.current) {
+      if (b.status !== "open") continue;
+      const win = b.choice === "NO";
+      b.status = win ? "won" : "lost";
+      recordBet({ id: b.id, match: `${entryRef.current?.p1 ?? "?"}–${entryRef.current?.p2 ?? "?"}`, mins: b.mins, choice: b.choice, status: b.status, reward: win ? ARCHIVED_REWARD : 0, at: Date.now() });
+      if (win) {
+        addBalance(ARCHIVED_REWARD);
+        setSpotr((v) => v + ARCHIVED_REWARD);
+        const id = b.id;
+        celebrateFrom(`bet-${id}`);
+        setJustWon((j) => [...j, id]);
+        setTimeout(() => setJustWon((j) => j.filter((x) => x !== id)), 2400);
+      }
+      changed = true;
+    }
+    if (changed) setBets(betsRef.current.slice());
+  }, []);
+
   // Settle open bets: a matching signal settles YES-as-win; elapsed window → NO-win.
   const settle = useCallback(
     (signal: { kind: MarketKind; side: 1 | 2 } | null) => {
@@ -326,6 +348,7 @@ export default function ReplayMatch() {
       if (!paused.current) {
         if (ptr.current >= recs.current.length) {
           setDone(true);
+          finalize(); // resolve any bets whose window ran past full time
           return;
         }
         process(recs.current[ptr.current]);
@@ -338,7 +361,7 @@ export default function ReplayMatch() {
       alive = false;
       clearTimeout(timer);
     };
-  }, [loaded, blocked, process]);
+  }, [loaded, blocked, process, finalize]);
 
   const ti = TIER[tier];
   const pos = 50 + (attacker === 2 ? ti.reach : -ti.reach);

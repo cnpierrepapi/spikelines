@@ -58,7 +58,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
 
       // started=false so the first poll only seeds the baseline (no settle/prompt
       // events for things that happened before the viewer connected).
-      const prev = { g1: 0, g2: 0, c1: 0, c2: 0, y1: 0, y2: 0, r1: 0, r2: 0, possTs: 0, chanceTs: 0, shotTs: 0, penTs: 0, varTs: 0, subTs: 0, started: false };
+      const prev = { g1: 0, g2: 0, c1: 0, c2: 0, y1: 0, y2: 0, r1: 0, r2: 0, possTs: 0, chanceTs: 0, shotTs: 0, penTs: 0, varTs: 0, subTs: 0, started: false, finished: false };
 
       async function poll() {
         const res = await fetch(`${base}/api/scores/snapshot/${fid}`, {
@@ -77,7 +77,9 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
         let chanceRec: any, chanceTs = -1;
         let shotRec: any, shotTs = -1;
         let penTs = -1, varTs = -1, subRec: any, subTs = -1;
+        let finishedNow = false;
         for (const rr of arr) {
+          if (rr.Action === "game_finalised") finishedNow = true;
           if (rr.Clock && rr.Ts > clockTs) { clock = rr.Clock; clockTs = rr.Ts; }
           if (POSS[rr.Action as string] && rr.Ts > possTs) { possRec = rr; possTs = rr.Ts; }
           // Cumulative stats only increase — take the MAX across ALL records, since
@@ -134,6 +136,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
         if (penTs > prev.penTs) { if (prev.started) send({ t: "feed", kind: "penalty", clock }); prev.penTs = penTs; }
         if (varTs > prev.varTs) { if (prev.started) send({ t: "feed", kind: "var", clock }); prev.varTs = varTs; }
         if (subTs > prev.subTs) { if (prev.started) send({ t: "feed", kind: "sub", side: subRec?.Data?.Participant === 2 ? 2 : 1, clock }); prev.subTs = subTs; }
+        if (finishedNow && !prev.finished) { send({ t: "finished" }); prev.finished = true; }
         prev.started = true;
       }
 
