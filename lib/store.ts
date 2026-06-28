@@ -17,8 +17,9 @@ export type StoredBet = {
 const BETS_KEY = "spikes_bets";
 const BAL_KEY = "spikes_balance";
 const PLAYED_KEY = "spikes_played";
-const PAID_KEY = "spikes_paid";
 const SAVES_PREFIX = "spikes_saves_"; // + YYYY-MM-DD
+
+export const REPLAY_COST = 175; // SPIKES to replay an already-played archived match
 
 // Cost of each streak-save through the day; the last value caps all further saves.
 const STREAK_SAVE_SCHEDULE = [25, 50, 125, 150, 175];
@@ -74,15 +75,16 @@ export function markPlayed(fid: number) {
   if (!has() || hasPlayed(fid)) return;
   localStorage.setItem(PLAYED_KEY, JSON.stringify([...getPlayed(), fid]));
 }
-
-// ── $5 paid unlock (stubbed; real USDC later) ─────────────────────
-export function isPaid(): boolean {
-  if (!has()) return false;
-  return localStorage.getItem(PAID_KEY) === "1";
-}
-export function setPaid(v: boolean) {
+export function unmarkPlayed(fid: number) {
   if (!has()) return;
-  localStorage.setItem(PAID_KEY, v ? "1" : "0");
+  localStorage.setItem(PLAYED_KEY, JSON.stringify(getPlayed().filter((f) => f !== fid)));
+}
+// Buy a replay of an already-played archived match: spend REPLAY_COST, clear the
+// played flag so it can be played once more (re-marked on the next first call).
+export function buyReplay(fid: number): boolean {
+  if (!spendBalance(REPLAY_COST)) return false;
+  unmarkPlayed(fid);
+  return true;
 }
 
 // ── streak-save (escalating daily SPIKES sink) ────────────────────

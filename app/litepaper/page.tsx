@@ -41,10 +41,11 @@ export default function Litepaper() {
           leaderboard ranked by <span className="text-foreground">streak accuracy</span> → top players share a weekly USDC pool.
         </Block>
 
-        <Block h="Free vs paid">
-          Free to play; every match playable once (so the board can&apos;t be farmed). <span className="text-foreground">$5</span> unlocks
-          a live stat overlay and extra entries. SPIKES — earned or bought — are spent to <span className="text-foreground">save a streak</span> a
-          wrong call would end (cost rises each use that day). SPIKES never buy a bigger bankroll or better odds.
+        <Block h="SPIKES">
+          Free to play; every match is one-shot, so the leaderboard can&apos;t be farmed. <span className="text-foreground">SPIKES</span> — earned
+          by correct calls or bought in packs — are spent to <span className="text-foreground">save a streak</span> a wrong call would end
+          (cost rises each use that day, capped) and to <span className="text-foreground">replay an already-played archived match</span> (175 SPIKES).
+          SPIKES never buy a bigger bankroll or better odds.
         </Block>
 
         <Block h="Why it&apos;s trustworthy">

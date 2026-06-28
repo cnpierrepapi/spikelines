@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { recordBet, addBalance, hasPlayed, markPlayed, getBalance, streakSaveCost, buyStreakSave, isPaid, setPaid as persistPaid, recordGameStats } from "@/lib/store";
+import { recordBet, addBalance, hasPlayed, markPlayed, getBalance, streakSaveCost, buyStreakSave, recordGameStats, buyReplay, REPLAY_COST } from "@/lib/store";
 import { celebrateFrom } from "@/lib/celebrate";
 import { type MarketKind, type Side, type Trigger, sideOf, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
@@ -70,13 +70,10 @@ export default function ReplayMatch() {
   const [graduated, setGraduated] = useState(false);
   const [blocked, setBlocked] = useState(false); // one-shot: already played this match
   const [saveOffer, setSaveOffer] = useState<{ cost: number; streak: number } | null>(null);
-  const [paid, setPaidState] = useState(false); // $5 premium (stat overlay)
-  const [stats, setStats] = useState({ s1: 0, s2: 0, poss1: 0, poss2: 0 });
 
   // Decide on mount only, so marking-as-played mid-game doesn't block the session.
   useEffect(() => {
     if (hasPlayed(fid)) setBlocked(true);
-    setPaidState(isPaid());
   }, [fid]);
   // SPIKES shown = the persistent wallet balance (so spends/earns are real).
   useEffect(() => {
@@ -103,7 +100,6 @@ export default function ReplayMatch() {
   const saveOfferRef = useRef<{ cost: number; streak: number } | null>(null);
   saveOfferRef.current = saveOffer;
   const bonusAwarded = useRef(false);
-  const statsRef = useRef({ s1: 0, s2: 0, poss1: 0, poss2: 0 });
   const gameBetsRef = useRef(0);
   const maxStreakRef = useRef(0);
 
@@ -272,8 +268,6 @@ export default function ReplayMatch() {
         if (TIER[t]) {
           setTier(t);
           setAttacker(sideOf(r.Participant));
-          if (sideOf(r.Participant) === 1) statsRef.current.poss1++; else statsRef.current.poss2++;
-          setStats({ ...statsRef.current });
         }
       }
 
@@ -302,7 +296,7 @@ export default function ReplayMatch() {
         }, 5000);
       }
 
-      if (r.Action === "shot") { addEvent("👟", `Shot — ${teamName(sideOf(r.Participant))}`); if (sideOf(r.Participant) === 1) statsRef.current.s1++; else statsRef.current.s2++; setStats({ ...statsRef.current }); settle({ kind: "shot", side: sideOf(r.Participant) }); }
+      if (r.Action === "shot") { addEvent("👟", `Shot — ${teamName(sideOf(r.Participant))}`); settle({ kind: "shot", side: sideOf(r.Participant) }); }
       else if (r.Action === "penalty") addEvent("🥅", "Penalty awarded");
       else if (r.Action === "var") addEvent("📺", "VAR review");
       else if (r.Action === "substitution") addEvent("🔄", `Substitution${r.Data?.Participant ? ` — ${teamName(r.Data.Participant === 2 ? 2 : 1)}` : ""}`);
@@ -369,12 +363,26 @@ export default function ReplayMatch() {
   const progress = recs.current.length ? Math.min(100, Math.round((ptr.current / recs.current.length) * 100)) : 0;
 
   if (blocked) {
+    const canReplay = spotr >= REPLAY_COST;
+    const replay = () => {
+      if (buyReplay(fid)) {
+        setSpotr(getBalance());
+        ptr.current = 0;
+        prev.current = { g1: 0, g2: 0, c1: 0, c2: 0, y1: 0, y2: 0, r1: 0, r2: 0 };
+        gameBetsRef.current = 0;
+        maxStreakRef.current = 0;
+        setBlocked(false); // play it again
+      }
+    };
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4 px-4 text-center">
         <div className="text-5xl">✓</div>
         <p className="text-foreground font-bold text-lg">You&apos;ve already played this match.</p>
-        <p className="text-muted text-sm max-w-xs">Each match can only be played once — pick another to keep building your streak.</p>
-        <Link href="/play" className="text-primary font-bold mt-2">← back to matches</Link>
+        <p className="text-muted text-sm max-w-xs">Each match is one-shot — but you can buy a replay with SPIKES.</p>
+        <button onClick={replay} disabled={!canReplay} className={`mt-2 px-6 py-3 rounded-xl font-black transition ${canReplay ? "bg-primary text-background gold-glow active:scale-95" : "bg-white/5 border border-white/10 text-muted cursor-not-allowed"}`}>
+          {canReplay ? `Replay for ${REPLAY_COST} SPIKES` : `Need ${REPLAY_COST} SPIKES (you have ${spotr.toLocaleString()})`}
+        </button>
+        <Link href="/play" className="text-primary font-bold mt-1">← back to matches</Link>
       </div>
     );
   }
@@ -457,8 +465,6 @@ export default function ReplayMatch() {
           </div>
         )}
 
-            <StatsOverlay paid={paid} stats={stats} p1={entry?.p1 ?? "Home"} p2={entry?.p2 ?? "Away"} onUnlock={() => { persistPaid(true); setPaidState(true); }} />
-
             {done && (
               <div className="text-center text-muted text-sm">
                 Full time. <Link href="/play" className="text-primary font-bold">pick another match →</Link>
@@ -512,38 +518,6 @@ function Team({ name, iso, goals, active, right }: { name: string; iso?: string;
       {iso ? <img src={`/flags/${iso}.png`} alt={name} className="w-9 h-7 rounded object-cover ring-1 ring-white/10" /> : <div className="w-9 h-7 rounded bg-white/10" />}
       <span className={`text-sm font-bold truncate max-w-full ${active ? "text-primary" : "text-foreground"}`}>{name}</span>
       <span className="text-xs text-muted">{goals} goals</span>
-    </div>
-  );
-}
-
-function StatsOverlay({ paid, stats, p1, p2, onUnlock }: { paid: boolean; stats: { s1: number; s2: number; poss1: number; poss2: number }; p1: string; p2: string; onUnlock: () => void }) {
-  if (!paid) {
-    return (
-      <button onClick={onUnlock} className="card-surface rounded-2xl p-4 w-full text-left hover:border-primary/40 transition">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-xs uppercase tracking-widest text-muted mb-1">🔒 Live stats</div>
-            <div className="text-sm text-foreground font-bold">Unlock shots, possession &amp; danger read</div>
-          </div>
-          <span className="px-3 py-1.5 rounded-lg bg-primary/15 border border-primary/50 text-primary text-sm font-black shrink-0">$5</span>
-        </div>
-      </button>
-    );
-  }
-  const tot = stats.poss1 + stats.poss2;
-  const pct1 = tot ? Math.round((stats.poss1 / tot) * 100) : 50;
-  return (
-    <div className="card-surface rounded-2xl p-4">
-      <div className="text-xs uppercase tracking-widest text-muted mb-3">Live stats <span className="text-primary">· premium</span></div>
-      <div className="flex items-center justify-between text-3xl font-black tabular-nums mb-1">
-        <span>{stats.s1}</span><span className="text-muted text-xs self-center uppercase tracking-widest">shots</span><span>{stats.s2}</span>
-      </div>
-      <div className="text-[11px] text-muted flex justify-between mb-4"><span>{p1}</span><span>{p2}</span></div>
-      <div className="text-xs text-muted mb-1 flex justify-between"><span>possession</span><span>{pct1}% · {100 - pct1}%</span></div>
-      <div className="h-2 rounded-full bg-white/5 overflow-hidden flex">
-        <div className="h-full bg-primary" style={{ width: `${pct1}%` }} />
-        <div className="h-full bg-accent" style={{ width: `${100 - pct1}%` }} />
-      </div>
     </div>
   );
 }

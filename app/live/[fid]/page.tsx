@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { recordBet, addBalance, hasPlayed, markPlayed, getBalance, streakSaveCost, buyStreakSave, isPaid, setPaid as persistPaid, recordGameStats } from "@/lib/store";
+import { recordBet, addBalance, hasPlayed, markPlayed, getBalance, streakSaveCost, buyStreakSave, recordGameStats } from "@/lib/store";
 import { celebrateFrom } from "@/lib/celebrate";
 import { type MarketKind, type Side, type Trigger, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
@@ -49,12 +49,9 @@ export default function LiveMatch() {
   const [graduated, setGraduated] = useState(false);
   const [blocked, setBlocked] = useState(false); // one-shot: already played this match
   const [saveOffer, setSaveOffer] = useState<{ cost: number; streak: number } | null>(null);
-  const [paid, setPaidState] = useState(false); // $5 premium (stat overlay)
-  const [stats, setStats] = useState({ s1: 0, s2: 0, poss1: 0, poss2: 0 });
 
   useEffect(() => {
     if (hasPlayed(fid)) setBlocked(true);
-    setPaidState(isPaid());
   }, [fid]);
   // SPIKES shown = the persistent wallet balance (so spends/earns are real).
   useEffect(() => {
@@ -75,7 +72,6 @@ export default function LiveMatch() {
   const saveOfferRef = useRef<{ cost: number; streak: number } | null>(null);
   saveOfferRef.current = saveOffer;
   const bonusAwarded = useRef(false);
-  const statsRef = useRef({ s1: 0, s2: 0, poss1: 0, poss2: 0 });
   const gameBetsRef = useRef(0);
   const maxStreakRef = useRef(0);
 
@@ -218,8 +214,6 @@ export default function LiveMatch() {
       if (ev.t === "momentum") {
         setTier(ev.tier);
         setAttacker(ev.participant);
-        if (ev.participant === 1) statsRef.current.poss1++; else statsRef.current.poss2++;
-        setStats({ ...statsRef.current });
       } else if (ev.t === "chance") {
         // Spike the meter to the attacking side, then offer a side-framed call.
         // high_danger bypasses the routine cooldown so a sudden chance always asks.
@@ -250,11 +244,7 @@ export default function LiveMatch() {
         const sigKind: MarketKind = ev.kind === "yellow" || ev.kind === "red" ? "booking" : ev.kind;
         settle({ kind: sigKind, side });
       } else if (ev.t === "event") {
-        if (ev.kind === "shot") {
-          addEvent("👟", `Shot — ${teamName(ev.side === 2 ? 2 : 1)}`);
-          if ((ev.side === 2 ? 2 : 1) === 1) statsRef.current.s1++; else statsRef.current.s2++;
-          setStats({ ...statsRef.current });
-        }
+        if (ev.kind === "shot") addEvent("👟", `Shot — ${teamName(ev.side === 2 ? 2 : 1)}`);
         settle({ kind: ev.kind, side: ev.side === 2 ? 2 : 1 });
       } else if (ev.t === "feed") {
         if (ev.kind === "penalty") addEvent("🥅", "Penalty awarded");
@@ -343,7 +333,6 @@ export default function LiveMatch() {
               </div>
             )}
 
-            <StatsOverlay paid={paid} stats={stats} p1={entry?.p1 ?? "Home"} p2={entry?.p2 ?? "Away"} onUnlock={() => { persistPaid(true); setPaidState(true); }} />
           </div>
 
           <aside className="lg:col-span-1 mt-5 lg:mt-0">
@@ -392,38 +381,6 @@ function Team({ name, iso, goals, active, right }: { name: string; iso?: string;
       {iso ? <img src={`/flags/${iso}.png`} alt={name} className="w-9 h-7 rounded object-cover ring-1 ring-white/10" /> : <div className="w-9 h-7 rounded bg-white/10" />}
       <span className={`text-sm font-bold truncate max-w-full ${active ? "text-primary" : "text-foreground"}`}>{name}</span>
       <span className="text-xs text-muted">{goals} goals</span>
-    </div>
-  );
-}
-
-function StatsOverlay({ paid, stats, p1, p2, onUnlock }: { paid: boolean; stats: { s1: number; s2: number; poss1: number; poss2: number }; p1: string; p2: string; onUnlock: () => void }) {
-  if (!paid) {
-    return (
-      <button onClick={onUnlock} className="card-surface rounded-2xl p-4 w-full text-left hover:border-primary/40 transition">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-xs uppercase tracking-widest text-muted mb-1">🔒 Live stats</div>
-            <div className="text-sm text-foreground font-bold">Unlock shots, possession &amp; danger read</div>
-          </div>
-          <span className="px-3 py-1.5 rounded-lg bg-primary/15 border border-primary/50 text-primary text-sm font-black shrink-0">$5</span>
-        </div>
-      </button>
-    );
-  }
-  const tot = stats.poss1 + stats.poss2;
-  const pct1 = tot ? Math.round((stats.poss1 / tot) * 100) : 50;
-  return (
-    <div className="card-surface rounded-2xl p-4">
-      <div className="text-xs uppercase tracking-widest text-muted mb-3">Live stats <span className="text-primary">· premium</span></div>
-      <div className="flex items-center justify-between text-3xl font-black tabular-nums mb-1">
-        <span>{stats.s1}</span><span className="text-muted text-xs self-center uppercase tracking-widest">shots</span><span>{stats.s2}</span>
-      </div>
-      <div className="text-[11px] text-muted flex justify-between mb-4"><span>{p1}</span><span>{p2}</span></div>
-      <div className="text-xs text-muted mb-1 flex justify-between"><span>possession</span><span>{pct1}% · {100 - pct1}%</span></div>
-      <div className="h-2 rounded-full bg-white/5 overflow-hidden flex">
-        <div className="h-full bg-primary" style={{ width: `${pct1}%` }} />
-        <div className="h-full bg-accent" style={{ width: `${100 - pct1}%` }} />
-      </div>
     </div>
   );
 }
