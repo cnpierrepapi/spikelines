@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { recordBet, addBalance, hasPlayed, markPlayed, getBalance, streakSaveCost, buyStreakSave, recordGameStats } from "@/lib/store";
+import { recordBet, addBalance, markPlayed, getBalance, streakSaveCost, buyStreakSave, recordGameStats } from "@/lib/store";
 import { celebrateFrom } from "@/lib/celebrate";
 import { type MarketKind, type Side, type Trigger, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
@@ -47,12 +47,11 @@ export default function LiveMatch() {
   const [events, setEvents] = useState<Evt[]>([]);
   const [justWon, setJustWon] = useState<number[]>([]);
   const [graduated, setGraduated] = useState(false);
-  const [blocked, setBlocked] = useState(false); // one-shot: already played this match
   const [saveOffer, setSaveOffer] = useState<{ cost: number; streak: number } | null>(null);
 
-  useEffect(() => {
-    if (hasPlayed(fid)) setBlocked(true);
-  }, [fid]);
+  // Live matches are always re-enterable: the one-shot lock applies only to the
+  // archived replay (/match/[fid]). markPlayed still fires below so the archived
+  // version stays one-shot once this match hits full time.
   // SPIKES shown = the persistent wallet balance (so spends/earns are real).
   useEffect(() => {
     setSpotr(getBalance());
@@ -201,7 +200,6 @@ export default function LiveMatch() {
   }, [fid]);
 
   useEffect(() => {
-    if (blocked) return; // already played — don't open the stream
     const es = new EventSource(`/api/live-stream/${fid}`);
     es.onopen = () => setConnected(true);
     es.onmessage = (e) => {
@@ -259,22 +257,11 @@ export default function LiveMatch() {
     };
     es.onerror = () => setConnected(false);
     return () => es.close();
-  }, [fid, settle, teamName, addEvent, blocked, finalize]);
+  }, [fid, settle, teamName, addEvent, finalize]);
 
   const ti = TIER[tier];
   const pos = 50 + (attacker === 2 ? ti.reach : -ti.reach);
   const hot = tier === "high_danger";
-
-  if (blocked) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4 px-4 text-center">
-        <div className="text-5xl">✓</div>
-        <p className="text-foreground font-bold text-lg">You&apos;ve already played this match.</p>
-        <p className="text-muted text-sm max-w-xs">Each match can only be played once — pick another to keep building your streak.</p>
-        <Link href="/play" className="text-primary font-bold mt-2">← back to matches</Link>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen">
