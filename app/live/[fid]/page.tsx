@@ -39,6 +39,8 @@ export default function LiveMatch() {
   const [entry, setEntry] = useState<LiveEntry | null>(null);
   const [connected, setConnected] = useState(false);
   const [seen, setSeen] = useState(false);
+  const [running, setRunning] = useState(false); // match clock running (false = HT/break/stall)
+  const [finished, setFinished] = useState(false);
   const [tier, setTier] = useState<Tier>("safe");
   const [attacker, setAttacker] = useState<1 | 2>(1);
   const [displaySec, setDisplaySec] = useState(0); // monotonic, locally-ticked match clock
@@ -75,6 +77,7 @@ export default function LiveMatch() {
     clockAnchor.current = { seconds: c.Seconds, running: c.Running, at: Date.now(), lastServer: c.Seconds };
     secRef.current = c.Seconds;
     setDisplaySec(c.Seconds);
+    setRunning(c.Running); // drives the half-time / paused banner
   }, []);
 
   // Local 1s tick: advance from the anchor while the match clock is running.
@@ -276,6 +279,8 @@ export default function LiveMatch() {
         else if (ev.kind === "sub") addEvent("🔄", `Substitution — ${teamName(ev.side === 2 ? 2 : 1)}`);
       } else if (ev.t === "finished") {
         clockAnchor.current.running = false; // freeze the ticker at full time
+        setRunning(false);
+        setFinished(true);
         finalize(); // full time — resolve bets parked past FT
       }
       settle(null);
@@ -287,6 +292,10 @@ export default function LiveMatch() {
   const ti = TIER[tier];
   const pos = 50 + (attacker === 2 ? ti.reach : -ti.reach);
   const hot = tier === "high_danger";
+  // The feed pauses the clock at the break (Running:false). Surface it so a paused
+  // match doesn't look broken — markets only fire while the ball is in play.
+  const paused = seen && !running && !finished;
+  const pauseLabel = displaySec >= 2640 && displaySec <= 2820 ? "Half-time" : "Play paused";
 
   return (
     <div className="min-h-screen">
@@ -295,8 +304,8 @@ export default function LiveMatch() {
           <div className="lg:col-span-2 flex flex-col gap-5">
             <div className="flex items-center justify-between">
               <Link href="/play" className="text-muted hover:text-foreground text-sm">← matches</Link>
-              <span className={`text-xs font-mono px-2 py-1 rounded-full border ${connected ? "text-destructive border-destructive/40" : "text-muted border-white/10"}`}>
-                {connected ? "● LIVE" : "connecting…"}
+              <span className={`text-xs font-mono px-2 py-1 rounded-full border ${finished ? "text-muted border-white/10" : paused ? "text-primary border-primary/40" : connected ? "text-destructive border-destructive/40" : "text-muted border-white/10"}`}>
+                {finished ? "FULL TIME" : paused ? `⏸ ${pauseLabel.toUpperCase()}` : connected ? "● LIVE" : "connecting…"}
               </span>
             </div>
 
@@ -308,6 +317,13 @@ export default function LiveMatch() {
               </div>
               <Team name={entry?.p2 ?? "Away"} iso={entry?.iso2} goals={score.p2} active={attacker === 2 && tier !== "safe"} right />
             </div>
+
+            {paused && (
+              <div className="rounded-2xl border border-primary/30 bg-primary/5 p-4 text-center">
+                <p className="text-primary font-bold text-sm">⏸ {pauseLabel} — markets are paused</p>
+                <p className="text-muted text-xs mt-1">Calls open again as soon as the ball is back in play. The score stays live.</p>
+              </div>
+            )}
 
             <div className={`card-surface rounded-2xl p-5 ${hot ? "danger-glow" : ""}`}>
               <div className="flex items-center justify-between mb-3">
