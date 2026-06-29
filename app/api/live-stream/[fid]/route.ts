@@ -99,19 +99,25 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
         }
 
         // Scoreboard + per-side stat deltas.
+        //
+        // ⚠️ `cur` is a running-max WITHIN this poll only — it starts at 0, so a
+        // sparse poll whose records omit a stat collapses that stat to 0. We must
+        // therefore keep `prev` MONOTONIC ACROSS polls: never let a sparse poll
+        // lower the baseline. The old `Object.assign(prev, cur)` clobbered prev
+        // with the (possibly-0) poll value, so the next poll that re-reported the
+        // real total fired a PHANTOM second goal/corner/card event.
         if (anyScore) {
-          send({ t: "score", score: { p1: cur.g1, p2: cur.g2 }, clock });
-          if (prev.started) {
-            if (cur.g1 > prev.g1) send({ t: "stat", kind: "goal", side: 1, clock });
-            if (cur.g2 > prev.g2) send({ t: "stat", kind: "goal", side: 2, clock });
-            if (cur.c1 > prev.c1) send({ t: "stat", kind: "corner", side: 1, clock });
-            if (cur.c2 > prev.c2) send({ t: "stat", kind: "corner", side: 2, clock });
-            if (cur.y1 > prev.y1) send({ t: "stat", kind: "yellow", side: 1, clock });
-            if (cur.y2 > prev.y2) send({ t: "stat", kind: "yellow", side: 2, clock });
-            if (cur.r1 > prev.r1) send({ t: "stat", kind: "red", side: 1, clock });
-            if (cur.r2 > prev.r2) send({ t: "stat", kind: "red", side: 2, clock });
-          }
-          Object.assign(prev, cur);
+          send({ t: "score", score: { p1: Math.max(prev.g1, cur.g1), p2: Math.max(prev.g2, cur.g2) }, clock });
+          const bump = (k: keyof typeof cur, kind: string, side: 1 | 2) => {
+            if (cur[k] > prev[k]) {
+              if (prev.started) send({ t: "stat", kind, side, clock });
+              prev[k] = cur[k]; // raise the baseline ONLY on a real increase
+            }
+          };
+          bump("g1", "goal", 1); bump("g2", "goal", 2);
+          bump("c1", "corner", 1); bump("c2", "corner", 2);
+          bump("y1", "yellow", 1); bump("y2", "yellow", 2);
+          bump("r1", "red", 1); bump("r2", "red", 2);
         }
 
         // Meter follows possession.

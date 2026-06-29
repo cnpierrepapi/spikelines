@@ -22,8 +22,7 @@ const TIER: Record<Tier, { reach: number; color: string; label: string }> = {
 };
 const RING = 2 * Math.PI * 26;
 const LIVE_REWARD = 85; // SPIKES per correct call on live matches
-const PROMPT_COOLDOWN = 45; // match-seconds between routine prompts
-const HIGH_COOLDOWN = 15; // high-danger bypasses the routine cooldown (always call a real chance)
+const PROMPT_WINDOW_MS = 5000; // a fired prompt owns this window (the bet-placement time); data arriving inside it won't spawn another
 const STREAK_MILESTONE = 5; // streak length that awards a bonus
 const STREAK_BONUS = 50; // live bonus SPIKES at the milestone (archived = 25)
 const SAVE_DECIDE_MS = 6000; // live can't pause — auto-decline the streak-save after this
@@ -68,16 +67,29 @@ export default function LiveMatch() {
   // Monotonic clock anchor: re-anchored only by a FORWARD server reading, then
   // interpolated locally each second so the ticker keeps moving through poll
   // gaps/dropouts and a stale snapshot can never drag the timer backwards.
-  const clockAnchor = useRef({ seconds: 0, running: false, at: Date.now(), lastServer: 0 });
+  const clockAnchor = useRef({ seconds: 0, running: false, at: Date.now(), init: false });
 
-  // Accept a server clock only if it doesn't regress; re-anchor to wall time.
+  // The live clock is DECOUPLED from the TxLINE feed. We sync to the match ONCE
+  // (first reading), then the timer free-runs locally — incoming feed data only
+  // flips the running/paused state, it never re-anchors (and so never drags) the
+  // displayed clock. This is why a data pull no longer disturbs the ticker.
   const applyClock = useCallback((c: Clock) => {
     const a = clockAnchor.current;
-    if (c.Seconds < a.lastServer) return; // stale/regressed snapshot — ignore
-    clockAnchor.current = { seconds: c.Seconds, running: c.Running, at: Date.now(), lastServer: c.Seconds };
-    secRef.current = c.Seconds;
-    setDisplaySec(c.Seconds);
-    setRunning(c.Running); // drives the half-time / paused banner
+    if (!a.init) {
+      clockAnchor.current = { seconds: c.Seconds, running: c.Running, at: Date.now(), init: true };
+      secRef.current = c.Seconds;
+      setDisplaySec(c.Seconds);
+      setRunning(c.Running);
+      return;
+    }
+    // Only react to a pause/resume. Re-anchor at the CURRENT displayed second so
+    // no paused wall-time is added and the clock doesn't jump when play resumes.
+    if (c.Running !== a.running) {
+      a.seconds = secRef.current;
+      a.at = Date.now();
+      a.running = c.Running;
+      setRunning(c.Running);
+    }
   }, []);
 
   // Local 1s tick: advance from the anchor while the match clock is running.
@@ -90,8 +102,7 @@ export default function LiveMatch() {
     }, 1000);
     return () => clearInterval(id);
   }, []);
-  const cooldownSec = useRef(0);
-  const highCooldownSec = useRef(0);
+  const lastPromptAt = useRef(0); // wall-clock ms of the last prompt — enforces the 5s bet window between prompts
   const betsRef = useRef<Bet[]>([]);
   const eventsRef = useRef<Evt[]>([]);
   const entryRef = useRef<LiveEntry | null>(null);
@@ -192,6 +203,22 @@ export default function LiveMatch() {
     [applyResult]
   );
 
+  // Spawn a prompt for an incoming feed signal. Guarantees the bet window: only
+  // one prompt at a time, and once one fires it holds the floor for 5s — a second
+  // data tick inside that window will NOT replace or stack a prompt, so the player
+  // always gets the full bet-placement time on the call they're looking at.
+  const firePrompt = useCallback((trigger: Trigger, side: 1 | 2) => {
+    if (promptRef.current) return;
+    if (Date.now() - lastPromptAt.current < PROMPT_WINDOW_MS) return;
+    const m = pickMarket(trigger, side);
+    const mins = pickWindow(m.kind, true); // live → shorter 2–4 min windows
+    const qSide: 1 | 2 = m.side === 0 ? side : (m.side as 1 | 2);
+    const p: Prompt = { id: Date.now(), sec: secRef.current, mins, market: m.kind, side: m.side, question: marketQuestion(m.kind, teamName(qSide), mins), answered: null };
+    lastPromptAt.current = Date.now();
+    setPrompt(p);
+    setTimeout(() => setPrompt((cur) => (cur && cur.id === p.id && !cur.answered ? null : cur)), PROMPT_WINDOW_MS);
+  }, [teamName]);
+
   const answer = useCallback((choice: "YES" | "NO") => {
     const p = promptRef.current;
     if (!p || p.answered) return;
@@ -241,25 +268,17 @@ export default function LiveMatch() {
       if (ev.t === "momentum") {
         setTier(ev.tier);
         setAttacker(ev.participant);
+        // Every live data tick is a prompt opportunity — except calm/safe
+        // possession, which has no real chance worth betting on. firePrompt's 5s
+        // window stops these from stacking.
+        if (ev.tier !== "safe") firePrompt(ev.tier as Trigger, ev.participant === 2 ? 2 : 1);
       } else if (ev.t === "chance") {
         // Spike the meter to the attacking side, then offer a side-framed call.
-        // high_danger bypasses the routine cooldown so a sudden chance always asks.
         const trigger: Trigger = ev.trigger ?? "attack";
         const side: 1 | 2 = ev.side === 2 ? 2 : 1;
         setTier(trigger === "free_kick" || trigger === "shot" ? "danger" : (trigger as Tier));
         setAttacker(side);
-        const isHigh = trigger === "high_danger";
-        const gate = isHigh ? highCooldownSec.current : cooldownSec.current;
-        if (!promptRef.current && secRef.current >= gate) {
-          const m = pickMarket(trigger, side);
-          const mins = pickWindow(m.kind, true); // live → shorter 2–4 min windows
-          const qSide: 1 | 2 = m.side === 0 ? side : (m.side as 1 | 2);
-          const p: Prompt = { id: Date.now(), sec: secRef.current, mins, market: m.kind, side: m.side, question: marketQuestion(m.kind, teamName(qSide), mins), answered: null };
-          setPrompt(p);
-          cooldownSec.current = secRef.current + PROMPT_COOLDOWN;
-          highCooldownSec.current = secRef.current + HIGH_COOLDOWN;
-          setTimeout(() => setPrompt((cur) => (cur && cur.id === p.id && !cur.answered ? null : cur)), 5000);
-        }
+        firePrompt(trigger, side);
       } else if (ev.t === "score") {
         setScore((s) => ({ p1: Math.max(s.p1, ev.score.p1), p2: Math.max(s.p2, ev.score.p2) }));
       } else if (ev.t === "stat") {
@@ -278,7 +297,9 @@ export default function LiveMatch() {
         else if (ev.kind === "var") addEvent("📺", "VAR review");
         else if (ev.kind === "sub") addEvent("🔄", `Substitution — ${teamName(ev.side === 2 ? 2 : 1)}`);
       } else if (ev.t === "finished") {
-        clockAnchor.current.running = false; // freeze the ticker at full time
+        clockAnchor.current.seconds = secRef.current; // freeze the ticker at the current second
+        clockAnchor.current.at = Date.now();
+        clockAnchor.current.running = false;
         setRunning(false);
         setFinished(true);
         finalize(); // full time — resolve bets parked past FT
@@ -287,7 +308,7 @@ export default function LiveMatch() {
     };
     es.onerror = () => setConnected(false);
     return () => es.close();
-  }, [fid, settle, teamName, addEvent, finalize, applyClock]);
+  }, [fid, settle, teamName, addEvent, finalize, applyClock, firePrompt]);
 
   const ti = TIER[tier];
   const pos = 50 + (attacker === 2 ? ti.reach : -ti.reach);
