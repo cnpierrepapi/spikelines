@@ -27,7 +27,10 @@ const HIGH_COOLDOWN = 15; // high-danger bypasses the routine cooldown (always c
 const STREAK_MILESTONE = 5; // streak length that awards a bonus
 const STREAK_BONUS = 50; // live bonus SPIKES at the milestone (archived = 25)
 const SAVE_DECIDE_MS = 6000; // live can't pause — auto-decline the streak-save after this
-const fmtClock = (c?: Clock) => (c ? `${String(Math.floor(c.Seconds / 60)).padStart(2, "0")}:${String(c.Seconds % 60).padStart(2, "0")}` : "00:00");
+const fmtClock = (sec?: number) => {
+  const s = Math.max(0, Math.floor(sec ?? 0));
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+};
 
 export default function LiveMatch() {
   const params = useParams<{ fid: string }>();
@@ -38,7 +41,7 @@ export default function LiveMatch() {
   const [seen, setSeen] = useState(false);
   const [tier, setTier] = useState<Tier>("safe");
   const [attacker, setAttacker] = useState<1 | 2>(1);
-  const [clock, setClock] = useState<Clock | undefined>();
+  const [displaySec, setDisplaySec] = useState(0); // monotonic, locally-ticked match clock
   const [score, setScore] = useState({ p1: 0, p2: 0 });
   const [streak, setStreak] = useState(0);
   const [spotr, setSpotr] = useState(0);
@@ -60,6 +63,30 @@ export default function LiveMatch() {
   const promptRef = useRef<Prompt | null>(null);
   promptRef.current = prompt;
   const secRef = useRef(0);
+  // Monotonic clock anchor: re-anchored only by a FORWARD server reading, then
+  // interpolated locally each second so the ticker keeps moving through poll
+  // gaps/dropouts and a stale snapshot can never drag the timer backwards.
+  const clockAnchor = useRef({ seconds: 0, running: false, at: Date.now(), lastServer: 0 });
+
+  // Accept a server clock only if it doesn't regress; re-anchor to wall time.
+  const applyClock = useCallback((c: Clock) => {
+    const a = clockAnchor.current;
+    if (c.Seconds < a.lastServer) return; // stale/regressed snapshot — ignore
+    clockAnchor.current = { seconds: c.Seconds, running: c.Running, at: Date.now(), lastServer: c.Seconds };
+    secRef.current = c.Seconds;
+    setDisplaySec(c.Seconds);
+  }, []);
+
+  // Local 1s tick: advance from the anchor while the match clock is running.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const a = clockAnchor.current;
+      const sec = a.running ? a.seconds + (Date.now() - a.at) / 1000 : a.seconds;
+      secRef.current = Math.floor(sec);
+      setDisplaySec(Math.floor(sec));
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
   const cooldownSec = useRef(0);
   const highCooldownSec = useRef(0);
   const betsRef = useRef<Bet[]>([]);
@@ -207,10 +234,7 @@ export default function LiveMatch() {
       try { ev = JSON.parse(e.data); } catch { return; }
       if (ev.t === "ready") return;
       setSeen(true);
-      if (ev.clock) {
-        setClock(ev.clock);
-        secRef.current = ev.clock.Seconds;
-      }
+      if (ev.clock) applyClock(ev.clock);
       if (ev.t === "momentum") {
         setTier(ev.tier);
         setAttacker(ev.participant);
@@ -251,13 +275,14 @@ export default function LiveMatch() {
         else if (ev.kind === "var") addEvent("📺", "VAR review");
         else if (ev.kind === "sub") addEvent("🔄", `Substitution — ${teamName(ev.side === 2 ? 2 : 1)}`);
       } else if (ev.t === "finished") {
+        clockAnchor.current.running = false; // freeze the ticker at full time
         finalize(); // full time — resolve bets parked past FT
       }
       settle(null);
     };
     es.onerror = () => setConnected(false);
     return () => es.close();
-  }, [fid, settle, teamName, addEvent, finalize]);
+  }, [fid, settle, teamName, addEvent, finalize, applyClock]);
 
   const ti = TIER[tier];
   const pos = 50 + (attacker === 2 ? ti.reach : -ti.reach);
@@ -279,7 +304,7 @@ export default function LiveMatch() {
               <Team name={entry?.p1 ?? "Home"} iso={entry?.iso1} goals={score.p1} active={attacker === 1 && tier !== "safe"} />
               <div className="text-center">
                 <div className="text-3xl font-black tabular-nums">{score.p1}<span className="text-muted mx-1">–</span>{score.p2}</div>
-                <div className="text-xs font-mono text-muted mt-1">{fmtClock(clock)}</div>
+                <div className="text-xs font-mono text-muted mt-1">{fmtClock(displaySec)}</div>
               </div>
               <Team name={entry?.p2 ?? "Away"} iso={entry?.iso2} goals={score.p2} active={attacker === 2 && tier !== "safe"} right />
             </div>
@@ -334,7 +359,7 @@ export default function LiveMatch() {
                     <span className="text-foreground truncate">
                       {b.label} · <span className={b.choice === "YES" ? "text-success font-bold" : "text-destructive font-bold"}>{b.choice}</span>
                     </span>
-                    {b.status === "open" && <span className="text-primary text-xs font-mono shrink-0">⏳ {fmtClock({ Running: true, Seconds: b.deadlineSec })}</span>}
+                    {b.status === "open" && <span className="text-primary text-xs font-mono shrink-0">⏳ {fmtClock(b.deadlineSec)}</span>}
                     {b.status === "won" && <span className="text-success text-xs font-bold shrink-0">✓ +{LIVE_REWARD}</span>}
                     {b.status === "lost" && <span className="text-destructive text-xs font-bold shrink-0">✕ missed</span>}
                   </div>
