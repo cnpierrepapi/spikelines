@@ -20,7 +20,7 @@ doc.fillColor(GREY).font("Helvetica").fontSize(9).text("A real-time prediction g
 doc.strokeColor("#dddddd").moveTo(56, doc.y).lineTo(539, doc.y).stroke().moveDown(0.5);
 
 h1("1. Overview");
-p("Spikelines turns a live football match into a stream of 5-second micro-predictions. When a team builds an attack, the player is asked whether a specific event (goal, corner, or shot for the attacking side; a booking for either) occurs within a short window. Correct calls build a streak and earn SPIKES, the in-app currency. It is the free, viral entry point of a three-product family (Spikelines, Flashcalls, Agenthesis) that share the SPIKES currency.");
+p("Spikelines turns a live football match into a stream of 5-second micro-predictions. When a team builds an attack, the player is asked whether a specific event (goal, corner, or shot for the attacking side; a booking for either) occurs within a short window. Correct calls build a streak and earn SPIKES, the in-app currency. It is a free, viral, provably-fair prediction game powered end-to-end by the TxLINE on-chain data layer.");
 
 h1("2. Game mechanics");
 li("Trigger: prompts fire on attacking/danger/high-danger possession and shots, attributed to the attacking side. High-danger bypasses the routine cooldown so a sudden chance always asks.");

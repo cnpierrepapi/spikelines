@@ -365,8 +365,8 @@ export default function LiveMatch() {
           <div className="card-surface gold-glow rounded-2xl p-8 max-w-sm text-center animate-pop">
             <div className="text-5xl mb-3">👁️</div>
             <h2 className="text-2xl font-black mb-2">You&apos;ve got the eye</h2>
-            <p className="text-muted mb-5">{STREAK_MILESTONE}-streak! <span className="text-primary font-bold">+{STREAK_BONUS} SPIKES</span> credited. Ready for sharper calls?</p>
-            <a href="https://flashcalls.vercel.app" target="_blank" rel="noopener noreferrer" className="block w-full py-3 rounded-xl bg-primary text-background font-black gold-glow">Try Flashcalls →</a>
+            <p className="text-muted mb-5">{STREAK_MILESTONE}-streak! <span className="text-primary font-bold">+{STREAK_BONUS} SPIKES</span> credited. Keep it rolling.</p>
+            <button onClick={() => setGraduated(false)} className="block w-full py-3 rounded-xl bg-primary text-background font-black gold-glow">Keep playing →</button>
           </div>
         </div>
       )}

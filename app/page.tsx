@@ -1,4 +1,5 @@
 import Link from "next/link";
+import UpcomingMatches from "@/components/UpcomingMatches";
 
 export default function Intro() {
   return (
@@ -25,6 +26,8 @@ export default function Intro() {
         <span className="rounded-full border border-white/10 px-3 py-1.5 text-muted">live + archived matches</span>
         <span className="rounded-full border border-white/10 px-3 py-1.5 text-muted">TxLINE-verified</span>
       </div>
+
+      <UpcomingMatches />
     </main>
   );
 }

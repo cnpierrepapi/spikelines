@@ -1,5 +1,5 @@
-// Client-side store for the shared user state (localStorage). Stands in for the
-// cross-product account + on-chain layer until the real backend exists.
+// Client-side store for user state (localStorage). Stands in for the
+// account + on-chain layer until the real backend exists.
 //   - SPIKES balance + bet history (earned currency)
 //   - played matches (one-shot-per-match: each match playable once ever)
 //   - paid flag ($5 user-slot unlock; stubbed until USDC rails land)
