@@ -16,7 +16,7 @@ type Rec = {
   Participant?: number;
   Participant1Id?: number;
   Participant2Id?: number;
-  Data?: { Participant?: number };
+  Data?: { Participant?: number; Outcome?: string };
   Ts?: number;
 };
 type Entry = { fid: number; p1: string; p2: string; iso1: string; iso2: string; minutes: number };
@@ -61,6 +61,7 @@ export default function ReplayMatch() {
   const [attacker, setAttacker] = useState<1 | 2>(1);
   const [clock, setClock] = useState<Clock | undefined>();
   const [score, setScore] = useState({ p1: 0, p2: 0 });
+  const [shootout, setShootout] = useState<{ p1: number; p2: number } | null>(null); // penalty shootout (PE)
   const [streak, setStreak] = useState(0);
   const [spotr, setSpotr] = useState(0);
   const [prompt, setPrompt] = useState<Prompt | null>(null);
@@ -84,6 +85,9 @@ export default function ReplayMatch() {
   const ptr = useRef(0);
   const paused = useRef(false);
   const prev = useRef({ g1: 0, g2: 0, c1: 0, c2: 0, y1: 0, y2: 0, r1: 0, r2: 0 });
+  const peRef = useRef({ p1: 0, p2: 0 }); // last-seen penalty-shootout goals
+  const shootoutRef = useRef(false); // once the shootout starts, no more in-play prompts
+  shootoutRef.current = !!shootout;
   const secRef = useRef(0);
   const cooldownSec = useRef(0);
   const highCooldownSec = useRef(0);
@@ -275,7 +279,7 @@ export default function ReplayMatch() {
       // high_danger bypasses the routine cooldown so a sudden chance always asks.
       const trig = TRIGGER[r.Action as string];
       const gate = trig === "high_danger" ? highCooldownSec.current : cooldownSec.current;
-      if (trig && !promptRef.current && sec >= gate) {
+      if (trig && !promptRef.current && !shootoutRef.current && sec >= gate) {
         const side = sideOf(r.Participant);
         const m = pickMarket(trig, side);
         const mins = pickWindow(m.kind);
@@ -301,13 +305,30 @@ export default function ReplayMatch() {
       else if (r.Action === "var") addEvent("📺", "VAR review");
       else if (r.Action === "substitution") addEvent("🔄", `Substitution${r.Data?.Participant ? ` — ${teamName(r.Data.Participant === 2 ? 2 : 1)}` : ""}`);
 
+      // Penalty shootout (PE period) — kept OUT of Total, so the scoreboard stays
+      // at the regulation/ET score. Surface it as its own line; PE only climbs.
+      if (r.Score) {
+        const pe1 = Math.max(peRef.current.p1, r.Score.Participant1?.PE?.Goals ?? 0);
+        const pe2 = Math.max(peRef.current.p2, r.Score.Participant2?.PE?.Goals ?? 0);
+        if ((pe1 > 0 || pe2 > 0) && (pe1 !== peRef.current.p1 || pe2 !== peRef.current.p2)) {
+          peRef.current = { p1: pe1, p2: pe2 };
+          setShootout({ p1: pe1, p2: pe2 });
+          setPrompt(null); // shootout started — close any open call
+          paused.current = false;
+        }
+      }
+
       // goals / cards / corners via cumulative-total deltas
       if (r.Score) {
         // Cumulative stats only increase — never let a record with a partial
-        // Score.Total drop the running tally.
+        // Score.Total drop the running tally. EXCEPTION: a VAR overturn legitimately
+        // chalks a goal off — `action_discarded` (or `var_end` Outcome=Overturned)
+        // carries the corrected lower Total, so trust it for goals and announce it.
         const pc = prev.current;
+        const overturn = r.Action === "action_discarded" || (r.Action === "var_end" && r.Data?.Outcome === "Overturned");
+        const rawG1 = tot(r.Score, "Participant1", "Goals"), rawG2 = tot(r.Score, "Participant2", "Goals");
         const cur = {
-          g1: Math.max(pc.g1, tot(r.Score, "Participant1", "Goals")), g2: Math.max(pc.g2, tot(r.Score, "Participant2", "Goals")),
+          g1: overturn ? rawG1 : Math.max(pc.g1, rawG1), g2: overturn ? rawG2 : Math.max(pc.g2, rawG2),
           c1: Math.max(pc.c1, tot(r.Score, "Participant1", "Corners")), c2: Math.max(pc.c2, tot(r.Score, "Participant2", "Corners")),
           y1: Math.max(pc.y1, tot(r.Score, "Participant1", "YellowCards")), y2: Math.max(pc.y2, tot(r.Score, "Participant2", "YellowCards")),
           r1: Math.max(pc.r1, tot(r.Score, "Participant1", "RedCards")), r2: Math.max(pc.r2, tot(r.Score, "Participant2", "RedCards")),
@@ -315,7 +336,9 @@ export default function ReplayMatch() {
         const n1 = entryRef.current?.p1 ?? "Home";
         const n2 = entryRef.current?.p2 ?? "Away";
         if (cur.g1 > pc.g1) { addEvent("⚽", `Goal — ${n1}`); settle({ kind: "goal", side: 1 }); }
+        else if (cur.g1 < pc.g1) addEvent("🚫", `Goal disallowed (VAR) — ${n1}`);
         if (cur.g2 > pc.g2) { addEvent("⚽", `Goal — ${n2}`); settle({ kind: "goal", side: 2 }); }
+        else if (cur.g2 < pc.g2) addEvent("🚫", `Goal disallowed (VAR) — ${n2}`);
         if (cur.c1 > pc.c1) { addEvent("🚩", `Corner — ${n1}`); settle({ kind: "corner", side: 1 }); }
         if (cur.c2 > pc.c2) { addEvent("🚩", `Corner — ${n2}`); settle({ kind: "corner", side: 2 }); }
         if (cur.r1 > pc.r1) { addEvent("🟥", `Red card — ${n1}`); settle({ kind: "booking", side: 1 }); }
@@ -369,6 +392,8 @@ export default function ReplayMatch() {
         setSpotr(getBalance());
         ptr.current = 0;
         prev.current = { g1: 0, g2: 0, c1: 0, c2: 0, y1: 0, y2: 0, r1: 0, r2: 0 };
+        peRef.current = { p1: 0, p2: 0 };
+        setShootout(null);
         gameBetsRef.current = 0;
         maxStreakRef.current = 0;
         setBlocked(false); // play it again
@@ -418,10 +443,25 @@ export default function ReplayMatch() {
             <div className="text-3xl font-black tabular-nums">
               {score.p1}<span className="text-muted mx-1">–</span>{score.p2}
             </div>
-            <div className="text-xs font-mono text-muted mt-1">{fmtClock(clock)}</div>
+            {shootout ? (
+              <div className="text-[11px] font-bold text-primary mt-1">pens {shootout.p1}–{shootout.p2}</div>
+            ) : (
+              <div className="text-xs font-mono text-muted mt-1">{fmtClock(clock)}</div>
+            )}
           </div>
           <Team name={entry?.p2 ?? "Away"} iso={entry?.iso2} goals={score.p2} active={attacker === 2 && tier !== "safe"} right />
         </div>
+
+        {shootout && (
+          <div className="rounded-2xl border border-primary/30 bg-primary/5 p-3 text-center">
+            <p className="text-primary font-bold text-sm">
+              🥅 Penalty shootout — {teamName(1)} {shootout.p1}–{shootout.p2} {teamName(2)}
+              {done && shootout.p1 !== shootout.p2 && (
+                <span className="text-foreground"> · {teamName(shootout.p1 > shootout.p2 ? 1 : 2)} win</span>
+              )}
+            </p>
+          </div>
+        )}
 
         <div className={`card-surface rounded-2xl p-5 ${hot ? "danger-glow" : ""}`}>
           <div className="flex items-center justify-between mb-3">

@@ -64,6 +64,8 @@ export default function LiveMatch() {
 
   const promptRef = useRef<Prompt | null>(null);
   promptRef.current = prompt;
+  const shootoutRef = useRef(false); // once the shootout starts, no more in-play prompts
+  shootoutRef.current = !!shootout;
   const secRef = useRef(0);
   // Monotonic clock anchor: re-anchored only by a FORWARD server reading, then
   // interpolated locally each second so the ticker keeps moving through poll
@@ -212,6 +214,7 @@ export default function LiveMatch() {
   // data tick inside that window will NOT replace or stack a prompt, so the player
   // always gets the full bet-placement time on the call they're looking at.
   const firePrompt = useCallback((trigger: Trigger, side: 1 | 2) => {
+    if (shootoutRef.current) return; // shootout announced — calls are closed
     if (promptRef.current) return;
     if (Date.now() - lastPromptAt.current < PROMPT_WINDOW_MS) return;
     const m = pickMarket(trigger, side);
@@ -336,6 +339,7 @@ export default function LiveMatch() {
         setScore({ p1: ev.score.p1, p2: ev.score.p2 });
       } else if (ev.t === "shootout") {
         setShootout({ p1: ev.score.p1, p2: ev.score.p2 });
+        setPrompt(null); // shootout started — close any open call
       } else if (ev.t === "stat") {
         const side: 1 | 2 = ev.side === 2 ? 2 : 1;
         if (ev.kind === "goal_disallowed") {
