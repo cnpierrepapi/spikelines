@@ -58,7 +58,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
 
       // started=false so the first poll only seeds the baseline (no settle/prompt
       // events for things that happened before the viewer connected).
-      const prev = { g1: 0, g2: 0, c1: 0, c2: 0, y1: 0, y2: 0, r1: 0, r2: 0, possTs: 0, chanceTs: 0, shotTs: 0, penTs: 0, varTs: 0, subTs: 0, started: false, finished: false };
+      const prev = { g1: 0, g2: 0, c1: 0, c2: 0, y1: 0, y2: 0, r1: 0, r2: 0, pe1: 0, pe2: 0, possTs: 0, chanceTs: 0, shotTs: 0, penTs: 0, varTs: 0, subTs: 0, started: false, finished: false };
 
       async function poll() {
         const res = await fetch(`${base}/api/scores/snapshot/${fid}`, {
@@ -78,8 +78,16 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
         let shotRec: any, shotTs = -1;
         let penTs = -1, varTs = -1, subRec: any, subTs = -1;
         let finishedNow = false;
+        // VAR overturn (the one case a score legitimately DECREASES) + the latest
+        // cumulative Score (authoritative current totals, incl. the rollback) +
+        // penalty-shootout goals (the PE period, which Total excludes).
+        let overturn = false;
+        let lastScore: any = null, lastScoreTs = -1;
+        let pe1 = 0, pe2 = 0;
         for (const rr of arr) {
           if (rr.Action === "game_finalised") finishedNow = true;
+          if (rr.Action === "action_discarded") overturn = true;
+          if (rr.Action === "var_end" && rr.Data?.Outcome === "Overturned") overturn = true;
           if (rr.Clock && rr.Ts > clockTs) { clock = rr.Clock; clockTs = rr.Ts; }
           if (POSS[rr.Action as string] && rr.Ts > possTs) { possRec = rr; possTs = rr.Ts; }
           // Cumulative stats only increase — take the MAX across ALL records, since
@@ -90,6 +98,10 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
             cur.c1 = Math.max(cur.c1, tot(rr.Score, "Participant1", "Corners")); cur.c2 = Math.max(cur.c2, tot(rr.Score, "Participant2", "Corners"));
             cur.y1 = Math.max(cur.y1, tot(rr.Score, "Participant1", "YellowCards")); cur.y2 = Math.max(cur.y2, tot(rr.Score, "Participant2", "YellowCards"));
             cur.r1 = Math.max(cur.r1, tot(rr.Score, "Participant1", "RedCards")); cur.r2 = Math.max(cur.r2, tot(rr.Score, "Participant2", "RedCards"));
+            if (rr.Score.Participant1?.Total && rr.Ts > lastScoreTs) { lastScore = rr.Score; lastScoreTs = rr.Ts; }
+            // Shootout (PE) goals only ever climb — max across records.
+            pe1 = Math.max(pe1, rr.Score.Participant1?.PE?.Goals ?? 0);
+            pe2 = Math.max(pe2, rr.Score.Participant2?.PE?.Goals ?? 0);
           }
           if (TRIGGER[rr.Action as string] && rr.Ts > chanceTs) { chanceRec = rr; chanceTs = rr.Ts; }
           if (rr.Action === "shot" && rr.Ts > shotTs) { shotRec = rr; shotTs = rr.Ts; }
@@ -107,6 +119,19 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
         // with the (possibly-0) poll value, so the next poll that re-reported the
         // real total fired a PHANTOM second goal/corner/card event.
         if (anyScore) {
+          // VAR overturn is the ONLY legitimate score decrease. When the feed
+          // signals one, trust the latest cumulative Total (which already reflects
+          // the rollback), pull our baseline DOWN to it, and announce the
+          // disallowed goal. The disallowed `goal` / stale `var_end` records keep
+          // their pre-overturn Total forever, so a plain running-max never recovers.
+          if (overturn && lastScore) {
+            const lg1 = tot(lastScore, "Participant1", "Goals");
+            const lg2 = tot(lastScore, "Participant2", "Goals");
+            if (prev.started && lg1 < prev.g1) send({ t: "stat", kind: "goal_disallowed", side: 1, clock });
+            if (prev.started && lg2 < prev.g2) send({ t: "stat", kind: "goal_disallowed", side: 2, clock });
+            prev.g1 = cur.g1 = lg1;
+            prev.g2 = cur.g2 = lg2;
+          }
           send({ t: "score", score: { p1: Math.max(prev.g1, cur.g1), p2: Math.max(prev.g2, cur.g2) }, clock });
           const bump = (k: keyof typeof cur, kind: string, side: 1 | 2) => {
             if (cur[k] > prev[k]) {
@@ -118,6 +143,13 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
           bump("c1", "corner", 1); bump("c2", "corner", 2);
           bump("y1", "yellow", 1); bump("y2", "yellow", 2);
           bump("r1", "red", 1); bump("r2", "red", 2);
+        }
+
+        // Penalty shootout (PE period). Total excludes it, so the main scoreboard
+        // stays at the regulation/ET score — surface the shootout as its own line.
+        if ((pe1 > 0 || pe2 > 0) && (pe1 !== prev.pe1 || pe2 !== prev.pe2)) {
+          send({ t: "shootout", score: { p1: pe1, p2: pe2 }, clock });
+          prev.pe1 = pe1; prev.pe2 = pe2;
         }
 
         // Meter follows possession.

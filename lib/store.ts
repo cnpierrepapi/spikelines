@@ -143,6 +143,7 @@ export type LiveRoomSnapshot = {
   gameBets: number;
   bonusAwarded: boolean;
   score: { p1: number; p2: number };
+  shootout: { p1: number; p2: number } | null; // penalty shootout (PE), null if none
   sec: number;
   finished: boolean;
 };

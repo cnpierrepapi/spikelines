@@ -44,6 +44,7 @@ export default function LiveMatch() {
   const [attacker, setAttacker] = useState<1 | 2>(1);
   const [displaySec, setDisplaySec] = useState(0); // monotonic, locally-ticked match clock
   const [score, setScore] = useState({ p1: 0, p2: 0 });
+  const [shootout, setShootout] = useState<{ p1: number; p2: number } | null>(null); // penalty shootout (PE)
   const [streak, setStreak] = useState(0);
   const [spotr, setSpotr] = useState(0);
   const [prompt, setPrompt] = useState<Prompt | null>(null);
@@ -276,6 +277,7 @@ export default function LiveMatch() {
     gameBetsRef.current = snap.gameBets ?? 0;
     bonusAwarded.current = !!snap.bonusAwarded;
     setScore(snap.score ?? { p1: 0, p2: 0 });
+    if (snap.shootout) setShootout(snap.shootout);
     if (snap.finished) setFinished(true);
     if (snap.sec) {
       secRef.current = snap.sec;
@@ -298,10 +300,11 @@ export default function LiveMatch() {
       gameBets: gameBetsRef.current,
       bonusAwarded: bonusAwarded.current,
       score,
+      shootout,
       sec: secRef.current,
       finished,
     });
-  }, [fid, bets, events, streak, score, finished]);
+  }, [fid, bets, events, streak, score, shootout, finished]);
 
   useEffect(() => {
     const es = new EventSource(`/api/live-stream/${fid}`);
@@ -327,9 +330,21 @@ export default function LiveMatch() {
         setAttacker(side);
         firePrompt(trigger, side);
       } else if (ev.t === "score") {
-        setScore((s) => ({ p1: Math.max(s.p1, ev.score.p1), p2: Math.max(s.p2, ev.score.p2) }));
+        // Trust the server's score directly — it is the single source of truth and
+        // is correction-aware (handles VAR rollbacks). A client-side max would clamp
+        // a disallowed goal back up and never let the score come down.
+        setScore({ p1: ev.score.p1, p2: ev.score.p2 });
+      } else if (ev.t === "shootout") {
+        setShootout({ p1: ev.score.p1, p2: ev.score.p2 });
       } else if (ev.t === "stat") {
         const side: 1 | 2 = ev.side === 2 ? 2 : 1;
+        if (ev.kind === "goal_disallowed") {
+          // VAR chalked a goal off — record it honestly; don't settle (the goal
+          // market already resolved when the goal first landed).
+          addEvent("🚫", `Goal disallowed (VAR) — ${teamName(side)}`);
+          settle(null);
+          return;
+        }
         if (ev.kind === "goal") addEvent("⚽", `Goal — ${teamName(side)}`);
         else if (ev.kind === "corner") addEvent("🚩", `Corner — ${teamName(side)}`);
         else if (ev.kind === "yellow") addEvent("🟨", `Yellow card — ${teamName(side)}`);
@@ -381,10 +396,25 @@ export default function LiveMatch() {
               <Team name={entry?.p1 ?? "Home"} iso={entry?.iso1} goals={score.p1} active={attacker === 1 && tier !== "safe"} />
               <div className="text-center">
                 <div className="text-3xl font-black tabular-nums">{score.p1}<span className="text-muted mx-1">–</span>{score.p2}</div>
-                <div className="text-xs font-mono text-muted mt-1">{fmtClock(displaySec)}</div>
+                {shootout ? (
+                  <div className="text-[11px] font-bold text-primary mt-1">pens {shootout.p1}–{shootout.p2}</div>
+                ) : (
+                  <div className="text-xs font-mono text-muted mt-1">{fmtClock(displaySec)}</div>
+                )}
               </div>
               <Team name={entry?.p2 ?? "Away"} iso={entry?.iso2} goals={score.p2} active={attacker === 2 && tier !== "safe"} right />
             </div>
+
+            {shootout && (
+              <div className="rounded-2xl border border-primary/30 bg-primary/5 p-3 text-center">
+                <p className="text-primary font-bold text-sm">
+                  🥅 Penalty shootout — {teamName(1)} {shootout.p1}–{shootout.p2} {teamName(2)}
+                  {finished && shootout.p1 !== shootout.p2 && (
+                    <span className="text-foreground"> · {teamName(shootout.p1 > shootout.p2 ? 1 : 2)} win</span>
+                  )}
+                </p>
+              </div>
+            )}
 
             {paused && (
               <div className="rounded-2xl border border-primary/30 bg-primary/5 p-4 text-center">
