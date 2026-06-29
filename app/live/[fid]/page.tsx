@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { recordBet, addBalance, markPlayed, getBalance, streakSaveCost, buyStreakSave, recordGameStats } from "@/lib/store";
+import { recordBet, addBalance, markPlayed, getBalance, streakSaveCost, buyStreakSave, recordGameStats, getLiveRoom, saveLiveRoom } from "@/lib/store";
 import { celebrateFrom } from "@/lib/celebrate";
 import { type MarketKind, type Side, type Trigger, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
@@ -114,6 +114,9 @@ export default function LiveMatch() {
   const bonusAwarded = useRef(false);
   const gameBetsRef = useRef(0);
   const maxStreakRef = useRef(0);
+  // Skip the mount-pass save: hydration's setState hasn't committed yet, so the
+  // first persistence run would read stale empty state and clobber the snapshot.
+  const persistedOnce = useRef(false);
 
   const teamName = useCallback((side: 1 | 2) => (side === 2 ? entryRef.current?.p2 : entryRef.current?.p1) ?? (side === 2 ? "Away" : "Home"), []);
   const saveGame = useCallback(() => {
@@ -255,6 +258,50 @@ export default function LiveMatch() {
   useEffect(() => {
     fetch("/api/fixtures").then((r) => r.json()).then((d) => setEntry((d.fixtures ?? []).find((m: LiveEntry) => m.fid === fid) ?? null)).catch(() => {});
   }, [fid]);
+
+  // Hydrate the room from the last saved snapshot so a reload keeps the player's
+  // streak, bets, events and scoreboard instead of resetting to empty. Feed data
+  // (score/clock/momentum) self-heals on reconnect; this restores what doesn't.
+  useEffect(() => {
+    persistedOnce.current = false; // re-arm the skip-first guard for this fixture
+    const snap = getLiveRoom(fid);
+    if (!snap) return;
+    betsRef.current = (snap.bets as Bet[]) ?? [];
+    setBets(betsRef.current.slice());
+    eventsRef.current = (snap.events as Evt[]) ?? [];
+    setEvents(eventsRef.current.slice());
+    setStreak(snap.streak ?? 0);
+    streakRef.current = snap.streak ?? 0;
+    maxStreakRef.current = snap.maxStreak ?? 0;
+    gameBetsRef.current = snap.gameBets ?? 0;
+    bonusAwarded.current = !!snap.bonusAwarded;
+    setScore(snap.score ?? { p1: 0, p2: 0 });
+    if (snap.finished) setFinished(true);
+    if (snap.sec) {
+      secRef.current = snap.sec;
+      setDisplaySec(snap.sec); // seed the clock so it doesn't flash 00:00 before the first poll
+    }
+  }, [fid]);
+
+  // Persist the player-derived room state on every change (feed-derived score/sec
+  // are captured too, as a reload seed). secRef/refs are read live at write time.
+  useEffect(() => {
+    if (!persistedOnce.current) {
+      persistedOnce.current = true;
+      return;
+    }
+    saveLiveRoom(fid, {
+      bets,
+      events,
+      streak,
+      maxStreak: maxStreakRef.current,
+      gameBets: gameBetsRef.current,
+      bonusAwarded: bonusAwarded.current,
+      score,
+      sec: secRef.current,
+      finished,
+    });
+  }, [fid, bets, events, streak, score, finished]);
 
   useEffect(() => {
     const es = new EventSource(`/api/live-stream/${fid}`);

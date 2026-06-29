@@ -130,6 +130,40 @@ export function recordGameStats(fid: number, match: string, maxStreak: number, b
   games.push({ fid, match, maxStreak, bets });
   localStorage.setItem(GAMES_KEY, JSON.stringify(games));
 }
+// ── per-fixture live-room snapshot (survives reload) ──────────────
+// The live room derives streak / bets / events from a one-shot delta stream that
+// the server won't replay on reconnect, so they'd vanish on reload. We snapshot
+// the player-derived state (plus a score/clock seed to avoid a 0–0 flash) keyed
+// by fixture id, hydrate it on mount, and re-save it whenever it changes.
+export type LiveRoomSnapshot = {
+  bets: unknown[];
+  events: unknown[];
+  streak: number;
+  maxStreak: number;
+  gameBets: number;
+  bonusAwarded: boolean;
+  score: { p1: number; p2: number };
+  sec: number;
+  finished: boolean;
+};
+const LIVE_PREFIX = "spikes_live_"; // + fid
+
+export function getLiveRoom(fid: number): LiveRoomSnapshot | null {
+  if (!has()) return null;
+  try {
+    const raw = localStorage.getItem(LIVE_PREFIX + fid);
+    return raw ? (JSON.parse(raw) as LiveRoomSnapshot) : null;
+  } catch {
+    return null;
+  }
+}
+export function saveLiveRoom(fid: number, snap: LiveRoomSnapshot) {
+  if (!has()) return;
+  try {
+    localStorage.setItem(LIVE_PREFIX + fid, JSON.stringify(snap));
+  } catch {}
+}
+
 // Points one match contributes (0–100), with the low-sample cap applied.
 export function gamePoints(g: GameStat): number {
   if (g.bets <= 0) return 0;
