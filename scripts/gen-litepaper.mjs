@@ -36,7 +36,7 @@ p("Example: Match A — 40 max streak over 80 calls = 50 pts. Match B — 20 max
 p("Anti-farming: a match's points are capped at 35 unless at least 14 calls were made in it, so a few lucky calls on a tiny sample cannot post a high accuracy. Scoring on accuracy (a ratio) rather than volume keeps players who buy more entries from dominating purely by quantity.");
 
 h1("4. SPIKES economy & monetization");
-li("SPIKES are earned per correct call (20 archived / 85 live) plus a once-per-run bonus at a 5-streak (25 archived / 50 live), or bought in USDC packs.");
+li("SPIKES are earned per correct call (15 archived / 50 live) plus a once-per-run bonus at a 5-streak (25 archived / 50 live), or bought in USDC packs.");
 li("SPIKES sink 1 — 'streak-save': when a wrong call would end an active streak, spend SPIKES to keep it. Cost escalates per use each day (25, 50, 125, 150, then capped at 175).");
 li("SPIKES sink 2 — 'replay': every match is one-shot, but an already-played archived match can be replayed for 175 SPIKES.");
 li("SPIKES never buy a bigger bankroll or better prize odds (equal-footing; everyone plays the same stake). SPIKES packs are 100% revenue; USDC reward pools are funded by a discretionary allocation.");

@@ -17,8 +17,8 @@ It's free and viral: long streaks hit milestones that pay out bonus **SPIKES**.
 - **Momentum meter** sways with live possession tiers (safe → attack → danger → high danger).
 - **Side-framed micro-markets** open on attacking pressure: goal / corner / shot for the attacking team, plus bookings — each settled on that team's stat delta within a short window.
 - **Two modes:**
-  - **Live** — currently in-play matches, streamed in real time (100 SPIKES / correct).
-  - **Archived** — full matches replayed from kickoff (5 SPIKES / correct).
+  - **Live** — currently in-play matches, streamed in real time (50 SPIKES / correct).
+  - **Archived** — full matches replayed from kickoff (15 SPIKES / correct).
 - **Highlights feed** — goals, shots, corners, cards, penalties, VAR and subs as they happen.
 - Matches move from **Live → Archived automatically at full time**.
 

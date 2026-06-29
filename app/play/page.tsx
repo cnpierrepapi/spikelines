@@ -83,7 +83,7 @@ export default function Lobby() {
             <section>
               <div className="flex items-center gap-2 mb-3">
                 <span className="text-xs uppercase tracking-widest text-destructive font-bold">● Live</span>
-                <span className="text-[11px] text-muted">real-time · 85 SPIKES / correct</span>
+                <span className="text-[11px] text-muted">real-time · 50 SPIKES / correct</span>
               </div>
               <div className="grid sm:grid-cols-2 gap-3">
                 {live === null && <div className="text-muted text-sm">checking…</div>}
@@ -98,7 +98,7 @@ export default function Lobby() {
             <section>
               <div className="flex items-center gap-2 mb-3">
                 <span className="text-xs uppercase tracking-widest text-primary font-bold">Upcoming</span>
-                <span className="text-[11px] text-muted">kicks off soon · 85 SPIKES / correct</span>
+                <span className="text-[11px] text-muted">kicks off soon · 50 SPIKES / correct</span>
               </div>
               <div className="grid sm:grid-cols-2 gap-3">
                 {fixtures.length === 0 && <div className="text-muted text-sm">checking…</div>}
@@ -113,7 +113,7 @@ export default function Lobby() {
             <section>
               <div className="flex items-center gap-2 mb-3">
                 <span className="text-xs uppercase tracking-widest text-muted font-bold">Archived</span>
-                <span className="text-[11px] text-muted">from kickoff · 20 SPIKES / correct</span>
+                <span className="text-[11px] text-muted">from kickoff · 15 SPIKES / correct</span>
               </div>
               <div className="grid sm:grid-cols-2 gap-3">
                 {archived === null && <div className="text-muted text-sm">loading…</div>}

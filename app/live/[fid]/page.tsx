@@ -21,7 +21,7 @@ const TIER: Record<Tier, { reach: number; color: string; label: string }> = {
   high_danger: { reach: 44, color: "#ff5a67", label: "HIGH DANGER" },
 };
 const RING = 2 * Math.PI * 26;
-const LIVE_REWARD = 85; // SPIKES per correct call on live matches
+const LIVE_REWARD = 50; // SPIKES per correct call on live matches
 const PROMPT_WINDOW_MS = 5000; // a fired prompt owns this window (the bet-placement time); data arriving inside it won't spawn another
 const STREAK_MILESTONE = 5; // streak length that awards a bonus
 const STREAK_BONUS = 50; // live bonus SPIKES at the milestone (archived = 25)
