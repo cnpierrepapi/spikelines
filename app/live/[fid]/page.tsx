@@ -194,8 +194,10 @@ export default function LiveMatch() {
     }
   }, [streak, saveGame]);
 
+  // Resolve team names + flags from the fixtures feed (live AND upcoming), so an
+  // upcoming match (not in the live-only list) still renders its matchup.
   useEffect(() => {
-    fetch("/api/live").then((r) => r.json()).then((d) => setEntry((d.matches ?? []).find((m: LiveEntry) => m.fid === fid) ?? null)).catch(() => {});
+    fetch("/api/fixtures").then((r) => r.json()).then((d) => setEntry((d.fixtures ?? []).find((m: LiveEntry) => m.fid === fid) ?? null)).catch(() => {});
   }, [fid]);
 
   useEffect(() => {

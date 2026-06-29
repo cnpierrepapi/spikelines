@@ -51,6 +51,9 @@ export default function Lobby() {
   // A finished match lives in Archived — don't also show it as Live.
   const archivedFids = new Set(allArchived.map((a) => a.fid));
   const liveOnly = (live ?? []).filter((m) => !archivedFids.has(m.fid));
+  // Upcoming = fixtures that haven't kicked off yet (and aren't already archived
+  // or shown as the hero).
+  const upcoming = fixtures.filter((f) => !f.live && !archivedFids.has(f.fid) && f.fid !== heroFix?.fid);
 
   return (
     <div className="min-h-screen">
@@ -87,6 +90,21 @@ export default function Lobby() {
                 {live !== null && liveOnly.length === 0 && <div className="card-surface rounded-2xl p-4 text-muted text-sm sm:col-span-2">No live matches right now — play an archived one.</div>}
                 {liveOnly.map((m) => (
                   <MatchRow key={m.fid} href={`/live/${m.fid}`} m={m} live played={played.includes(m.fid)} />
+                ))}
+              </div>
+            </section>
+
+            {/* UPCOMING */}
+            <section>
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xs uppercase tracking-widest text-primary font-bold">Upcoming</span>
+                <span className="text-[11px] text-muted">kicks off soon · 85 SPIKES / correct</span>
+              </div>
+              <div className="grid sm:grid-cols-2 gap-3">
+                {fixtures.length === 0 && <div className="text-muted text-sm">checking…</div>}
+                {fixtures.length > 0 && upcoming.length === 0 && <div className="card-surface rounded-2xl p-4 text-muted text-sm sm:col-span-2">No upcoming matches in the next few days.</div>}
+                {upcoming.map((m) => (
+                  <MatchRow key={m.fid} href={`/live/${m.fid}`} m={m} sub={`kicks off ${kickoff(m.startTime)}`} played={played.includes(m.fid)} />
                 ))}
               </div>
             </section>
@@ -140,7 +158,7 @@ export default function Lobby() {
 function HeroMatch({ fix, arch }: { fix?: Fixture; arch?: Archived }) {
   // Prefer a live/upcoming headline fixture; fall back to the top archived match.
   if (fix) {
-    const href = fix.live ? `/live/${fix.fid}` : undefined;
+    const href = `/live/${fix.fid}`;
     const inner = (
       <div className="relative overflow-hidden rounded-3xl hero-bg border border-white/10 p-8 sm:p-10">
         <div className="absolute inset-x-0 bottom-0 h-24 hero-fade pointer-events-none" />
@@ -167,7 +185,7 @@ function HeroMatch({ fix, arch }: { fix?: Fixture; arch?: Archived }) {
           {fix.live ? (
             <span className="px-6 py-3 rounded-xl bg-destructive/20 border border-destructive/50 text-destructive font-black">Watch live →</span>
           ) : (
-            <span className="px-6 py-3 rounded-xl bg-white/5 border border-white/10 text-muted font-bold">Not started yet</span>
+            <span className="px-6 py-3 rounded-xl bg-primary/15 border border-primary/50 text-primary font-black">View match →</span>
           )}
         </div>
       </div>
