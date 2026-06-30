@@ -3,11 +3,14 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
-  getBalance, getBets, getGames, getPlayed, leaderboardScore,
+  getBalance, getBets, getGames, getPlayed, leaderboardScore, setBalance as setLocalBalance,
   getWallet, saveWallet, clearWallet,
   type StoredBet, type GameStat,
 } from "@/lib/store";
 import { detectWallets, connectWallet, signMessage, ownershipMessage, type WalletName } from "@/lib/wallet";
+import { PACKS, type Pack } from "@/lib/packs";
+import { payForPack } from "@/lib/deposit";
+import { verifyPack, requestWithdraw, syncProfile } from "@/lib/remote";
 
 const short = (a: string) => (a.length > 12 ? `${a.slice(0, 4)}…${a.slice(-4)}` : a);
 
@@ -23,6 +26,12 @@ export default function Profile() {
   const [busy, setBusy] = useState<WalletName | null>(null);
   const [installed, setInstalled] = useState<WalletName[]>([]);
 
+  const [rewards, setRewards] = useState(0); // withdrawable USDC owed
+  const [buying, setBuying] = useState<string | null>(null);
+  const [buyMsg, setBuyMsg] = useState("");
+  const [wMsg, setWMsg] = useState("");
+  const [withdrawing, setWithdrawing] = useState(false);
+
   useEffect(() => {
     setBalance(getBalance());
     setScore(leaderboardScore());
@@ -31,7 +40,40 @@ export default function Profile() {
     setPlayed(getPlayed().length);
     setWallet(getWallet());
     setInstalled(detectWallets());
+    // Pull authoritative balance + rewards owed from the backend.
+    syncProfile().then((p) => {
+      if (!p) return;
+      if (typeof p.spikes === "number") { setLocalBalance(p.spikes); setBalance(p.spikes); }
+      setRewards(Number(p.rewards_usdc) || 0);
+    });
   }, []);
+
+  // Buy a pack: pay USDC on-chain → server verifies + credits → adopt the new balance.
+  const buy = async (pack: Pack) => {
+    setBuyMsg(""); setErr("");
+    const w = installed[0];
+    if (!w) { setBuyMsg("Install a Solana wallet (Phantom) to buy."); return; }
+    setBuying(pack.id);
+    try {
+      const sig = await payForPack(w, pack);
+      const res = await verifyPack(sig, pack.id);
+      if (!res.ok) throw new Error(res.error || "verification failed");
+      if (typeof res.balance === "number") { setLocalBalance(res.balance); setBalance(res.balance); }
+      setBuyMsg(`✓ +${pack.spikes.toLocaleString()} SPIKES credited`);
+    } catch (e) {
+      setBuyMsg(e instanceof Error ? e.message : "Purchase failed.");
+    } finally {
+      setBuying(null);
+    }
+  };
+
+  const withdraw = async () => {
+    setWMsg(""); setWithdrawing(true);
+    const res = await requestWithdraw();
+    setWithdrawing(false);
+    if (res.ok) { setWMsg(`✓ $${res.queued?.toFixed(2)} queued — paid out shortly.`); setRewards(0); }
+    else setWMsg(res.error || "Withdraw failed.");
+  };
 
   // Derived stats.
   const settled = bets.length; // only won/lost calls are recorded
@@ -116,7 +158,21 @@ export default function Profile() {
                 </div>
                 <button onClick={unlink} className="text-muted hover:text-foreground text-xs font-bold shrink-0">unlink</button>
               </div>
-              <p className="text-muted text-[11px] mt-3">You&apos;re set to receive payouts at this address. Pool distributions are processed by Spikelines at the end of each weekly cycle.</p>
+              <div className="flex items-center justify-between gap-3 mt-3 pt-3 border-t border-white/10">
+                <div>
+                  <div className="text-[11px] uppercase tracking-widest text-muted">Withdrawable</div>
+                  <div className="text-xl font-black tabular-nums">${rewards.toFixed(2)} <span className="text-muted text-xs font-normal">USDC</span></div>
+                </div>
+                <button
+                  onClick={withdraw}
+                  disabled={withdrawing || rewards <= 0}
+                  className="px-4 py-2.5 rounded-xl bg-primary text-background font-black text-sm active:scale-95 transition disabled:opacity-40"
+                >
+                  {withdrawing ? "Queuing…" : "Withdraw"}
+                </button>
+              </div>
+              {wMsg && <p className="text-xs mt-2 text-muted">{wMsg}</p>}
+              <p className="text-muted text-[11px] mt-3">Payouts are sent to this address from the Spikelines treasury. Pool distributions are credited at the end of each weekly cycle.</p>
             </div>
           ) : (
             <div className="flex flex-col gap-3">
@@ -137,6 +193,34 @@ export default function Profile() {
               {err && <p className="text-destructive text-xs text-center">{err}</p>}
             </div>
           )}
+        </div>
+
+        {/* Buy SPIKES (USDC packs) */}
+        <div className="card-surface rounded-2xl p-5 mb-6">
+          <div className="flex items-center justify-between mb-1">
+            <h2 className="font-black text-lg">Buy SPIKES</h2>
+            <span className="text-xs uppercase tracking-widest text-muted">devnet USDC</span>
+          </div>
+          <p className="text-muted text-sm mb-4">Top up with USDC — paid straight to the treasury, verified on-chain, credited instantly.</p>
+          <div className="grid sm:grid-cols-3 gap-3">
+            {PACKS.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => buy(p)}
+                disabled={!!buying}
+                className="rounded-2xl border border-white/10 hover:border-primary/40 p-4 text-left transition active:scale-95 disabled:opacity-50"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs uppercase tracking-widest text-muted">{p.label}</span>
+                  {p.bonus && <span className="text-[10px] font-bold text-success">{p.bonus}</span>}
+                </div>
+                <div className="text-2xl font-black text-primary tabular-nums mt-1">{p.spikes.toLocaleString()}</div>
+                <div className="text-muted text-xs">SPIKES · ${p.usdc}</div>
+                <div className="mt-2 text-xs font-bold text-foreground">{buying === p.id ? "Confirm in wallet…" : "Buy →"}</div>
+              </button>
+            ))}
+          </div>
+          {buyMsg && <p className="text-sm mt-3 text-muted">{buyMsg}</p>}
         </div>
 
         {/* Career summary */}

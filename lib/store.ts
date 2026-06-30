@@ -36,6 +36,11 @@ export function addBalance(n: number) {
   if (!has()) return;
   localStorage.setItem(BAL_KEY, String(getBalance() + n));
 }
+// Set the balance to an authoritative value (e.g. server balance after a pack buy).
+export function setBalance(n: number) {
+  if (!has()) return;
+  localStorage.setItem(BAL_KEY, String(Math.max(0, Math.round(n))));
+}
 // Spend SPIKES; returns false (no change) if the balance is too low.
 export function spendBalance(n: number): boolean {
   if (!has()) return false;
@@ -130,6 +135,29 @@ export function recordGameStats(fid: number, match: string, maxStreak: number, b
   games.push({ fid, match, maxStreak, bets });
   localStorage.setItem(GAMES_KEY, JSON.stringify(games));
 }
+// ── identity (device id + chosen username) ────────────────────────
+// device_id = a stable anon key for this browser; it's the player's primary key
+// in Supabase. username is chosen on first /play visit.
+const DEVICE_KEY = "spikes_device";
+const USERNAME_KEY = "spikes_username";
+export function getDeviceId(): string {
+  if (!has()) return "";
+  let id = localStorage.getItem(DEVICE_KEY);
+  if (!id) {
+    id = (crypto.randomUUID?.() ?? `dev-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    localStorage.setItem(DEVICE_KEY, id);
+  }
+  return id;
+}
+export function getUsername(): string {
+  if (!has()) return "";
+  return localStorage.getItem(USERNAME_KEY) || "";
+}
+export function setUsername(name: string) {
+  if (!has()) return;
+  localStorage.setItem(USERNAME_KEY, name);
+}
+
 // ── payout wallet (Solana address for USDC rewards) ───────────────
 // Stored locally until the payout backend lands; it's the address a player's
 // pool share / SPIKES redemption would be sent to.

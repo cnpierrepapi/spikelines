@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { getGames, leaderboardScore, gamePoints, getBalance, MIN_BETS_FOR_HIGH, LOW_SAMPLE_CAP, type GameStat } from "@/lib/store";
+import { getGames, leaderboardScore, gamePoints, getBalance, getUsername, MIN_BETS_FOR_HIGH, LOW_SAMPLE_CAP, type GameStat } from "@/lib/store";
+import { fetchLeaderboard, syncProfile, type LeaderRow } from "@/lib/remote";
 
-// Seeded rivals so the board reads like a ranking until the real cross-user
-// backend lands. The signed-in player is inserted by their real local score.
+// Seeded rivals — used ONLY as a fallback when the backend is unconfigured or
+// empty. With the backend live, the board is real cross-player data.
 const RIVALS = [
   { name: "kayfabe", score: 214 },
   { name: "xG_wizard", score: 188 },
@@ -20,16 +21,31 @@ export default function Leaderboard() {
   const [games, setGames] = useState<GameStat[]>([]);
   const [score, setScore] = useState(0);
   const [balance, setBalance] = useState(0);
+  const [me, setMe] = useState("");
+  const [live, setLive] = useState<LeaderRow[] | null>(null); // real players, null until loaded
 
   useEffect(() => {
     const g = getGames();
     setGames(g);
     setScore(leaderboardScore(g));
     setBalance(getBalance());
+    setMe(getUsername());
+    // Push our latest score up, then pull the real board.
+    syncProfile().then(() => fetchLeaderboard()).then((r) => setLive(r.ok ? r.players : []));
   }, []);
 
-  const board = [...RIVALS, { name: "You", score, you: true } as { name: string; score: number; you?: boolean }].sort((a, b) => b.score - a.score);
-  const myRank = board.findIndex((r) => (r as { you?: boolean }).you) + 1;
+  type Row = { name: string; score: number; you?: boolean };
+  let board: Row[];
+  if (live && live.length) {
+    // Real cross-player board. Mark our row; if we haven't landed in it yet, add us.
+    board = live.map((p) => ({ name: p.username, score: p.score, you: !!me && p.username.toLowerCase() === me.toLowerCase() }));
+    if (me && !board.some((r) => r.you)) board.push({ name: me, score, you: true });
+    board.sort((a, b) => b.score - a.score);
+  } else {
+    // Fallback (backend off/empty): seeded rivals + local you.
+    board = [...RIVALS, { name: me || "You", score, you: true }].sort((a, b) => b.score - a.score);
+  }
+  const myRank = board.findIndex((r) => r.you) + 1;
 
   return (
     <div className="min-h-screen">
@@ -104,7 +120,7 @@ export default function Leaderboard() {
             );
           })}
         </div>
-        <p className="text-muted text-xs mt-4 text-center">Weekly USDC pool funded by Spikelines · seeded rivals shown until cross-player ranking ships.</p>
+        <p className="text-muted text-xs mt-4 text-center">Weekly USDC pool funded by Spikelines · {live && live.length ? "real cross-player ranking" : "seeded rivals shown until players join"}.</p>
       </main>
     </div>
   );
