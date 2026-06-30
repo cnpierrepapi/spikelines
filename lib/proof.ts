@@ -9,7 +9,7 @@
 // min?"), i.e. a DELTA. validate_stat proves ONE stat value at ONE feed event,
 // so we prove BOTH endpoints — the cumulative stat at the window's open and at
 // its close — each against the on-chain root, then the delta settles the bet.
-import { Connection, PublicKey } from "@solana/web3.js";
+import { Connection, PublicKey, Keypair } from "@solana/web3.js";
 import { AnchorProvider, Program, BN, type Idl } from "@coral-xyz/anchor";
 import rawIdl from "./txline/idl/txoracle.json";
 
@@ -19,6 +19,12 @@ const RPC = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
 const PROGRAM_ID = new PublicKey(process.env.TXORACLE_PROGRAM_ID || "6pW64gN1s2uqjHkn1unFeEjAwJkPGHoppGvS715wyP2J");
 const TXLINE_BASE = process.env.TXLINE_API_BASE || "https://txline-dev.txodds.com";
 const DAY_MS = 86_400_000;
+// validate_stat is read-only, but Anchor's .view() still builds a fee-paying tx,
+// and devnet `simulateTransaction` requires the fee payer to be an EXISTING,
+// funded, system-owned account (a random/zero key fails InvalidAccountForFee /
+// AccountNotFound). Point SOLANA_SIM_PAYER at any funded devnet wallet; the view
+// never spends it. Without it the proof simply stays 'pending' (not 'failed').
+const SIM_PAYER = process.env.SOLANA_SIM_PAYER;
 
 export type ProofStatus = "verified" | "failed" | "unprovable" | "pending";
 export type BetProof = {
@@ -107,8 +113,10 @@ function program(): Program {
   const vs = idl.instructions.find((i) => i.name === "validate_stat");
   if (vs && !vs.returns) vs.returns = "bool";
   const connection = new Connection(RPC, "confirmed");
-  // A read-only view never signs; a throwaway wallet satisfies the provider.
-  const wallet = { publicKey: PublicKey.default, signTransaction: async (t: unknown) => t, signAllTransactions: async (t: unknown) => t } as never;
+  // A read-only view never signs, but the fee-payer slot must be a real funded
+  // devnet account or simulate rejects it. Use SOLANA_SIM_PAYER when set.
+  const payer = SIM_PAYER ? new PublicKey(SIM_PAYER) : Keypair.generate().publicKey;
+  const wallet = { publicKey: payer, signTransaction: async (t: unknown) => t, signAllTransactions: async (t: unknown) => t } as never;
   const provider = new AnchorProvider(connection, wallet, { commitment: "confirmed" });
   _program = new Program(idl as Idl, provider);
   return _program;
@@ -159,7 +167,10 @@ async function viewStat(b: StatBundle): Promise<{ ok: boolean; root: string; err
       .view();
     return { ok: result === true, root: pda.toBase58() };
   } catch (e) {
-    const msg = String((e as Error)?.message ?? e);
+    // Anchor surfaces the program error in message; the simulate infra error
+    // (fee payer etc.) lives on simulationResponse.err. Prefer whichever is set.
+    const sr = (e as { simulationResponse?: { err?: unknown } })?.simulationResponse?.err;
+    const msg = sr ? JSON.stringify(sr) : String((e as Error)?.message ?? e);
     return { ok: false, root: pda.toBase58(), error: classify(msg) };
   }
 }
@@ -169,7 +180,10 @@ function classify(msg: string): string {
   if (/InvalidStatProof/i.test(msg)) return "InvalidStatProof";
   if (/InvalidSubTreeProof/i.test(msg)) return "InvalidSubTreeProof";
   if (/InvalidMainTreeProof/i.test(msg)) return "InvalidMainTreeProof";
-  return msg.slice(0, 140);
+  // Simulation-infra problems (fee payer not funded / stale blockhash) are NOT a
+  // data failure — flag them so the bet stays 'pending', never 'failed'.
+  if (/InvalidAccountForFee|AccountNotFound|BlockhashNotFound|account not found/i.test(msg)) return "SimInfra";
+  return msg.slice(0, 140) || "unknown";
 }
 
 // ── public entrypoint ─────────────────────────────────────────────
@@ -204,11 +218,15 @@ export async function verifyBet(args: {
     const root = vSettle.root;
     const bundles = { base: { seq: baseSeq, ...bBase, view: vBase }, settle: { seq: settleSeq, ...bSettle, view: vSettle } };
 
+    if (vBase.ok && vSettle.ok) {
+      return { status: "verified", root, valueBase, valueSettle, delta, recomputedYes, detail: "validate_stat ✓ both endpoints", bundles };
+    }
     if (vBase.error === "RootNotAvailable" || vSettle.error === "RootNotAvailable") {
       return { status: "unprovable", root, valueBase, valueSettle, delta, recomputedYes, detail: "on-chain root not posted yet", bundles };
     }
-    if (vBase.ok && vSettle.ok) {
-      return { status: "verified", root, valueBase, valueSettle, delta, recomputedYes, detail: "validate_stat ✓ both endpoints", bundles };
+    // Infra (unfunded sim payer / stale blockhash) → not a data failure: stay pending.
+    if (vBase.error === "SimInfra" || vSettle.error === "SimInfra") {
+      return { status: "pending", root, valueBase, valueSettle, delta, recomputedYes, detail: "verifier sim payer not configured (set SOLANA_SIM_PAYER)", bundles };
     }
     return { status: "failed", root, valueBase, valueSettle, delta, recomputedYes, detail: `view failed (${vBase.error ?? vBase.ok}/${vSettle.error ?? vSettle.ok})`, bundles };
   } catch (e) {
