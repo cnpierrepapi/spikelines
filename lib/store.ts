@@ -130,6 +130,29 @@ export function recordGameStats(fid: number, match: string, maxStreak: number, b
   games.push({ fid, match, maxStreak, bets });
   localStorage.setItem(GAMES_KEY, JSON.stringify(games));
 }
+// ── payout wallet (Solana address for USDC rewards) ───────────────
+// Stored locally until the payout backend lands; it's the address a player's
+// pool share / SPIKES redemption would be sent to.
+const WALLET_KEY = "spikes_wallet";
+// Base58, 32–44 chars — the standard shape of a Solana public key.
+const SOLANA_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+export function isValidWallet(addr: string): boolean {
+  return SOLANA_RE.test(addr.trim());
+}
+export function getWallet(): string {
+  if (!has()) return "";
+  return localStorage.getItem(WALLET_KEY) || "";
+}
+export function saveWallet(addr: string): boolean {
+  if (!has() || !isValidWallet(addr)) return false;
+  localStorage.setItem(WALLET_KEY, addr.trim());
+  return true;
+}
+export function clearWallet() {
+  if (!has()) return;
+  localStorage.removeItem(WALLET_KEY);
+}
+
 // ── per-fixture live-room snapshot (survives reload) ──────────────
 // The live room derives streak / bets / events from a one-shot delta stream that
 // the server won't replay on reconnect, so they'd vanish on reload. We snapshot

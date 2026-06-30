@@ -65,9 +65,10 @@ export default function Lobby() {
           </Link>
           <div className="flex items-center gap-3">
             <Link href="/leaderboard" className="text-sm text-muted hover:text-foreground">Leaderboard</Link>
-            <div className="text-sm font-mono px-3 py-1.5 rounded-full border border-white/10">
+            <Link href="/profile" className="text-sm text-muted hover:text-foreground">Profile</Link>
+            <Link href="/profile" className="text-sm font-mono px-3 py-1.5 rounded-full border border-white/10 hover:border-primary/40 transition">
               <span className="text-primary font-bold">{balance.toLocaleString()}</span> <span className="text-muted">SPIKES</span>
-            </div>
+            </Link>
           </div>
         </div>
       </nav>
