@@ -21,6 +21,8 @@ type Bet = {
   reward: number;
   proof_status: "verified" | "unprovable" | "failed" | "pending";
   proof_root: string | null;
+  reverted: boolean;
+  revert_reason: string | null;
   created_at: string;
 };
 type Fixture = { fixture_id: number; match: string };
@@ -51,7 +53,7 @@ export default function ProofPage() {
   const [fixture, setFixture] = useState("");
   const [outcome, setOutcome] = useState("");
   const [verifying, setVerifying] = useState<number | null>(null);
-  const [results, setResults] = useState<Record<number, { status: string; root: string | null; detail: string; delta: number | null }>>({});
+  const [results, setResults] = useState<Record<number, { status: string; root: string | null; detail: string; delta: number | null; reverted?: boolean; clawed?: number; revertReason?: string | null }>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -77,8 +79,11 @@ export default function ProofPage() {
     try {
       const j = await fetch("/api/proof/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) }).then((r) => r.json());
       if (j.ok) {
-        setResults((r) => ({ ...r, [id]: { status: j.status, root: j.root, detail: j.detail, delta: j.delta } }));
-        setBets((bs) => bs.map((b) => (b.id === id ? { ...b, proof_status: j.status, proof_root: j.root } : b)));
+        setResults((r) => ({ ...r, [id]: { status: j.status, root: j.root, detail: j.detail, delta: j.delta, reverted: j.reverted, clawed: j.clawed, revertReason: j.revertReason } }));
+        // An overturned win is rewritten to a loss with its reward clawed back.
+        setBets((bs) => bs.map((b) => (b.id === id
+          ? { ...b, proof_status: j.status, proof_root: j.root, reverted: !!j.reverted, revert_reason: j.revertReason ?? b.revert_reason, ...(j.clawed > 0 ? { outcome: "lost" as const, reward: 0 } : {}) }
+          : b)));
       }
     } catch {}
     setVerifying(null);
@@ -139,6 +144,9 @@ export default function ProofPage() {
                       <span className="text-muted">·</span>
                       <span className={b.choice === "YES" ? "text-success font-bold" : "text-destructive font-bold"}>{b.choice}</span>
                       <span className={`text-xs font-bold ${b.outcome === "won" ? "text-success" : "text-muted"}`}>{b.outcome === "won" ? `✓ +${b.reward}` : "✕"}</span>
+                      {b.reverted && (
+                        <span className="text-[10px] font-bold uppercase tracking-wider rounded-full border px-2 py-0.5 text-destructive border-destructive/40 bg-destructive/10">⚑ overturned</span>
+                      )}
                     </div>
                     <div className="text-[11px] text-muted mt-0.5 truncate">
                       {b.match} · {b.mins}m window · {b.username || "anon"} · {b.mode}
@@ -155,10 +163,10 @@ export default function ProofPage() {
                     </button>
                   </div>
                 </div>
-                {(res || b.proof_root) && (
+                {(res || b.proof_root || b.reverted) && (
                   <div className="mt-2 pt-2 border-t border-white/5 flex items-center justify-between gap-2 text-[11px]">
-                    <span className="text-muted truncate">
-                      {res ? res.detail : "on-chain root"}
+                    <span className={`truncate ${b.reverted ? "text-destructive" : "text-muted"}`}>
+                      {res?.revertReason || (b.reverted ? b.revert_reason : null) || (res ? res.detail : "on-chain root")}
                       {res?.delta != null && <span className="text-foreground"> · Δ{res.delta}</span>}
                     </span>
                     {(res?.root || b.proof_root) && (
