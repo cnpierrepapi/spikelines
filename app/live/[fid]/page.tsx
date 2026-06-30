@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { recordBet, addBalance, markPlayed, getBalance, streakSaveCost, buyStreakSave, recordGameStats, getLiveRoom, saveLiveRoom } from "@/lib/store";
+import { recordBet, addBalance, markPlayed, getBalance, streakSaveCost, buyStreakSave, recordGameStats, getLiveRoom, saveLiveRoom, EMPTY_STATS, type MatchStats } from "@/lib/store";
 import { celebrateFrom } from "@/lib/celebrate";
+import { MatchStatsPanel } from "@/components/match-stats";
 import { type MarketKind, type Side, type Trigger, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
 type Tier = "safe" | "attack" | "danger" | "high_danger";
@@ -44,6 +45,7 @@ export default function LiveMatch() {
   const [attacker, setAttacker] = useState<1 | 2>(1);
   const [displaySec, setDisplaySec] = useState(0); // monotonic, locally-ticked match clock
   const [score, setScore] = useState({ p1: 0, p2: 0 });
+  const [stats, setStats] = useState<MatchStats>(EMPTY_STATS); // cumulative corners + cards per side
   const [shootout, setShootout] = useState<{ p1: number; p2: number } | null>(null); // penalty shootout (PE)
   const [streak, setStreak] = useState(0);
   const [spotr, setSpotr] = useState(0);
@@ -129,6 +131,16 @@ export default function LiveMatch() {
   const addEvent = useCallback((icon: string, label: string) => {
     eventsRef.current = [{ id: Date.now() + Math.random(), icon, label, min: Math.floor(secRef.current / 60) }, ...eventsRef.current].slice(0, 12);
     setEvents(eventsRef.current.slice());
+  }, []);
+
+  // Tally a provable stat as it lands (goals come from the authoritative score).
+  const bumpStat = useCallback((kind: string, side: 1 | 2) => {
+    setStats((s) => {
+      if (kind === "corner") return side === 1 ? { ...s, c1: s.c1 + 1 } : { ...s, c2: s.c2 + 1 };
+      if (kind === "yellow") return side === 1 ? { ...s, y1: s.y1 + 1 } : { ...s, y2: s.y2 + 1 };
+      if (kind === "red") return side === 1 ? { ...s, r1: s.r1 + 1 } : { ...s, r2: s.r2 + 1 };
+      return s;
+    });
   }, []);
 
   const applyResult = useCallback((win: boolean) => {
@@ -219,8 +231,7 @@ export default function LiveMatch() {
     if (Date.now() - lastPromptAt.current < PROMPT_WINDOW_MS) return;
     const m = pickMarket(trigger, side);
     const mins = pickWindow(m.kind, true); // live → shorter 2–4 min windows
-    const qSide: 1 | 2 = m.side === 0 ? side : (m.side as 1 | 2);
-    const p: Prompt = { id: Date.now(), sec: secRef.current, mins, market: m.kind, side: m.side, question: marketQuestion(m.kind, teamName(qSide), mins), answered: null };
+    const p: Prompt = { id: Date.now(), sec: secRef.current, mins, market: m.kind, side: m.side, question: marketQuestion(m.kind, teamName(m.side), mins), answered: null };
     lastPromptAt.current = Date.now();
     setPrompt(p);
     setTimeout(() => setPrompt((cur) => (cur && cur.id === p.id && !cur.answered ? null : cur)), PROMPT_WINDOW_MS);
@@ -230,7 +241,7 @@ export default function LiveMatch() {
     const p = promptRef.current;
     if (!p || p.answered) return;
     setPrompt({ ...p, answered: choice });
-    const bet: Bet = { id: p.id, market: p.market, side: p.side, mins: p.mins, choice, deadlineSec: p.sec + p.mins * 60, status: "open", label: marketLabel(p.market, p.side, teamName(p.side === 0 ? 1 : (p.side as 1 | 2)), p.mins) };
+    const bet: Bet = { id: p.id, market: p.market, side: p.side, mins: p.mins, choice, deadlineSec: p.sec + p.mins * 60, status: "open", label: marketLabel(p.market, p.side, teamName(p.side), p.mins) };
     betsRef.current = [bet, ...betsRef.current].slice(0, 12);
     setBets(betsRef.current.slice());
     markPlayed(fid); // first call consumes this match (one-shot-per-match)
@@ -280,6 +291,7 @@ export default function LiveMatch() {
     gameBetsRef.current = snap.gameBets ?? 0;
     bonusAwarded.current = !!snap.bonusAwarded;
     setScore(snap.score ?? { p1: 0, p2: 0 });
+    if (snap.stats) setStats(snap.stats);
     if (snap.shootout) setShootout(snap.shootout);
     if (snap.finished) setFinished(true);
     if (snap.sec) {
@@ -303,11 +315,12 @@ export default function LiveMatch() {
       gameBets: gameBetsRef.current,
       bonusAwarded: bonusAwarded.current,
       score,
+      stats,
       shootout,
       sec: secRef.current,
       finished,
     });
-  }, [fid, bets, events, streak, score, shootout, finished]);
+  }, [fid, bets, events, streak, score, stats, shootout, finished]);
 
   useEffect(() => {
     const es = new EventSource(`/api/live-stream/${fid}`);
@@ -353,11 +366,12 @@ export default function LiveMatch() {
         else if (ev.kind === "corner") addEvent("🚩", `Corner — ${teamName(side)}`);
         else if (ev.kind === "yellow") addEvent("🟨", `Yellow card — ${teamName(side)}`);
         else if (ev.kind === "red") addEvent("🟥", `Red card — ${teamName(side)}`);
-        const sigKind: MarketKind = ev.kind === "yellow" || ev.kind === "red" ? "booking" : ev.kind;
-        settle({ kind: sigKind, side });
+        bumpStat(ev.kind, side);
+        // Each stat kind is its own provable market (goal/corner/yellow/red).
+        settle({ kind: ev.kind as MarketKind, side });
       } else if (ev.t === "event") {
+        // Shots are highlights only — not a bettable market (not anchored on-chain).
         if (ev.kind === "shot") addEvent("👟", `Shot — ${teamName(ev.side === 2 ? 2 : 1)}`);
-        settle({ kind: ev.kind, side: ev.side === 2 ? 2 : 1 });
       } else if (ev.t === "feed") {
         if (ev.kind === "penalty") addEvent("🥅", "Penalty awarded");
         else if (ev.kind === "var") addEvent("📺", "VAR review");
@@ -374,7 +388,7 @@ export default function LiveMatch() {
     };
     es.onerror = () => setConnected(false);
     return () => es.close();
-  }, [fid, settle, teamName, addEvent, finalize, applyClock, firePrompt]);
+  }, [fid, settle, teamName, addEvent, bumpStat, finalize, applyClock, firePrompt]);
 
   const ti = TIER[tier];
   const pos = 50 + (attacker === 2 ? ti.reach : -ti.reach);
@@ -449,6 +463,12 @@ export default function LiveMatch() {
                 <span className="text-muted text-xs">SPIKES</span>
               </div>
             </div>
+
+            <MatchStatsPanel
+              p1={entry?.p1 ?? "Home"}
+              p2={entry?.p2 ?? "Away"}
+              stats={{ goals: [score.p1, score.p2], corners: [stats.c1, stats.c2], yellow: [stats.y1, stats.y2], red: [stats.r1, stats.r2] }}
+            />
 
             {events.length > 0 && (
               <div className="card-surface rounded-2xl p-4">

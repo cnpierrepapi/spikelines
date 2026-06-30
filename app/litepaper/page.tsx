@@ -33,7 +33,7 @@ export default function Litepaper() {
 
         <Block h="What it is">
           A real-time &ldquo;what happens next?&rdquo; prediction game on live World Cup data. As a team
-          attacks, a 5-second call fires — <span className="text-foreground">score, corner, or shot?</span> Tap YES / NO.
+          attacks, a 5-second call fires — <span className="text-foreground">score, corner, or card?</span> Tap YES / NO.
         </Block>
 
         <Block h="The loop">

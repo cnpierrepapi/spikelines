@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { recordBet, addBalance, hasPlayed, markPlayed, getBalance, streakSaveCost, buyStreakSave, recordGameStats, buyReplay, REPLAY_COST } from "@/lib/store";
+import { recordBet, addBalance, hasPlayed, markPlayed, getBalance, streakSaveCost, buyStreakSave, recordGameStats, buyReplay, REPLAY_COST, EMPTY_STATS, type MatchStats } from "@/lib/store";
 import { celebrateFrom } from "@/lib/celebrate";
+import { MatchStatsPanel } from "@/components/match-stats";
 import { type MarketKind, type Side, type Trigger, sideOf, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
 type Tier = "safe" | "attack" | "danger" | "high_danger";
@@ -61,6 +62,7 @@ export default function ReplayMatch() {
   const [attacker, setAttacker] = useState<1 | 2>(1);
   const [clock, setClock] = useState<Clock | undefined>();
   const [score, setScore] = useState({ p1: 0, p2: 0 });
+  const [stats, setStats] = useState<MatchStats>(EMPTY_STATS); // cumulative corners + cards per side
   const [shootout, setShootout] = useState<{ p1: number; p2: number } | null>(null); // penalty shootout (PE)
   const [streak, setStreak] = useState(0);
   const [spotr, setSpotr] = useState(0);
@@ -216,7 +218,7 @@ export default function ReplayMatch() {
       const p = promptRef.current;
       if (!p || p.answered) return;
       setPrompt({ ...p, answered: choice });
-      const bet: Bet = { id: p.id, market: p.market, side: p.side, mins: p.mins, choice, deadlineSec: p.sec + p.mins * 60, status: "open", label: marketLabel(p.market, p.side, teamName(p.side === 0 ? 1 : (p.side as 1 | 2)), p.mins) };
+      const bet: Bet = { id: p.id, market: p.market, side: p.side, mins: p.mins, choice, deadlineSec: p.sec + p.mins * 60, status: "open", label: marketLabel(p.market, p.side, teamName(p.side), p.mins) };
       betsRef.current = [bet, ...betsRef.current].slice(0, 12);
       setBets(betsRef.current.slice());
       markPlayed(fid); // first call consumes this match (one-shot-per-match)
@@ -283,8 +285,7 @@ export default function ReplayMatch() {
         const side = sideOf(r.Participant);
         const m = pickMarket(trig, side);
         const mins = pickWindow(m.kind);
-        const qSide: 1 | 2 = m.side === 0 ? side : (m.side as 1 | 2);
-        const p: Prompt = { id: Date.now(), sec, mins, market: m.kind, side: m.side, question: marketQuestion(m.kind, teamName(qSide), mins), answered: null };
+        const p: Prompt = { id: Date.now(), sec, mins, market: m.kind, side: m.side, question: marketQuestion(m.kind, teamName(m.side), mins), answered: null };
         setPrompt(p);
         paused.current = true; // freeze-frame for the call
         cooldownSec.current = sec + PROMPT_COOLDOWN;
@@ -300,7 +301,9 @@ export default function ReplayMatch() {
         }, 5000);
       }
 
-      if (r.Action === "shot") { addEvent("👟", `Shot — ${teamName(sideOf(r.Participant))}`); settle({ kind: "shot", side: sideOf(r.Participant) }); }
+      // A shot is NOT a bettable market (shots aren't anchored on-chain), but it
+      // still shows in the highlights and acts as a prompt trigger above.
+      if (r.Action === "shot") addEvent("👟", `Shot — ${teamName(sideOf(r.Participant))}`);
       else if (r.Action === "penalty") addEvent("🥅", "Penalty awarded");
       else if (r.Action === "var") addEvent("📺", "VAR review");
       else if (r.Action === "substitution") addEvent("🔄", `Substitution${r.Data?.Participant ? ` — ${teamName(r.Data.Participant === 2 ? 2 : 1)}` : ""}`);
@@ -341,12 +344,13 @@ export default function ReplayMatch() {
         else if (cur.g2 < pc.g2) addEvent("🚫", `Goal disallowed (VAR) — ${n2}`);
         if (cur.c1 > pc.c1) { addEvent("🚩", `Corner — ${n1}`); settle({ kind: "corner", side: 1 }); }
         if (cur.c2 > pc.c2) { addEvent("🚩", `Corner — ${n2}`); settle({ kind: "corner", side: 2 }); }
-        if (cur.r1 > pc.r1) { addEvent("🟥", `Red card — ${n1}`); settle({ kind: "booking", side: 1 }); }
-        if (cur.r2 > pc.r2) { addEvent("🟥", `Red card — ${n2}`); settle({ kind: "booking", side: 2 }); }
-        if (cur.y1 > pc.y1) { addEvent("🟨", `Yellow — ${n1}`); settle({ kind: "booking", side: 1 }); }
-        if (cur.y2 > pc.y2) { addEvent("🟨", `Yellow — ${n2}`); settle({ kind: "booking", side: 2 }); }
+        if (cur.r1 > pc.r1) { addEvent("🟥", `Red card — ${n1}`); settle({ kind: "red", side: 1 }); }
+        if (cur.r2 > pc.r2) { addEvent("🟥", `Red card — ${n2}`); settle({ kind: "red", side: 2 }); }
+        if (cur.y1 > pc.y1) { addEvent("🟨", `Yellow — ${n1}`); settle({ kind: "yellow", side: 1 }); }
+        if (cur.y2 > pc.y2) { addEvent("🟨", `Yellow — ${n2}`); settle({ kind: "yellow", side: 2 }); }
         prev.current = cur;
         setScore({ p1: cur.g1, p2: cur.g2 });
+        setStats({ c1: cur.c1, c2: cur.c2, y1: cur.y1, y2: cur.y2, r1: cur.r1, r2: cur.r2 });
       }
 
       // settle "no" calls whose window has elapsed
@@ -489,6 +493,12 @@ export default function ReplayMatch() {
             <span className="text-muted text-xs">SPIKES</span>
           </div>
         </div>
+
+        <MatchStatsPanel
+          p1={entry?.p1 ?? "Home"}
+          p2={entry?.p2 ?? "Away"}
+          stats={{ goals: [score.p1, score.p2], corners: [stats.c1, stats.c2], yellow: [stats.y1, stats.y2], red: [stats.r1, stats.r2] }}
+        />
 
         {events.length > 0 && (
           <div className="card-surface rounded-2xl p-4">

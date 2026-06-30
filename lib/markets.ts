@@ -2,11 +2,14 @@
 // (/match/[fid]) match rooms. Keeping this in one place stops the two pages
 // from drifting apart again.
 //
-// A "market" is the question a prompt asks. Side-specific markets (goal/corner/
-// shot) are framed to the team currently attacking and settle on THAT team's
-// stat; booking is team-agnostic (side 0) and settles on either team.
-export type MarketKind = "goal" | "corner" | "shot" | "booking";
-export type Side = 0 | 1 | 2; // 0 = any team
+// A "market" is the question a prompt asks. Every market is side-framed to the
+// team currently attacking and settles on THAT team's stat. The four markets map
+// 1:1 onto the only stats TxLINE anchors on-chain (goals / corners / yellow / red
+// cards, per side) — so every bet is provable via the txoracle validate_stat
+// view. Shots are NOT on-chain, so there is no shot market (a shot still acts as
+// a TRIGGER that opens a goal/corner call, and still shows in the highlights).
+export type MarketKind = "goal" | "corner" | "yellow" | "red";
+export type Side = 1 | 2;
 export type Trigger = "high_danger" | "danger" | "attack" | "shot" | "free_kick";
 export type MarketSignal = { kind: MarketKind; side: 1 | 2 };
 
@@ -16,13 +19,14 @@ export type Market = { kind: MarketKind; side: Side };
 export const sideOf = (participant: unknown): 1 | 2 => (participant === 2 ? 2 : 1);
 
 // Map a possession/action trigger to weighted market choices. Intensity skews
-// the question: high danger → likely a goal call; calm attack → corner/shot.
+// the question: high danger → likely a goal call; a free kick → likely a card.
+// Red cards are rare, so they carry low weight (an occasional longshot call).
 const WEIGHTS: Record<Trigger, [MarketKind, number][]> = {
-  high_danger: [["goal", 5], ["corner", 3], ["shot", 2]],
-  danger: [["corner", 4], ["shot", 3], ["goal", 2], ["booking", 1]],
-  attack: [["corner", 3], ["shot", 4], ["booking", 2], ["goal", 1]],
-  shot: [["goal", 3], ["shot", 4], ["corner", 2], ["booking", 1]],
-  free_kick: [["booking", 5], ["corner", 2], ["shot", 2], ["goal", 1]],
+  high_danger: [["goal", 5], ["corner", 3], ["yellow", 1]],
+  danger: [["corner", 4], ["goal", 2], ["yellow", 2], ["red", 1]],
+  attack: [["corner", 4], ["yellow", 2], ["goal", 1], ["red", 1]],
+  shot: [["goal", 4], ["corner", 3], ["yellow", 1]],
+  free_kick: [["yellow", 5], ["corner", 2], ["goal", 1], ["red", 1]],
 };
 
 export function pickMarket(trigger: Trigger, side: 1 | 2, rng: () => number = Math.random): Market {
@@ -31,7 +35,7 @@ export function pickMarket(trigger: Trigger, side: 1 | 2, rng: () => number = Ma
   let r = rng() * total;
   let kind: MarketKind = table[0][0];
   for (const [k, w] of table) { r -= w; if (r <= 0) { kind = k; break; } }
-  return { kind, side: kind === "booking" ? 0 : side };
+  return { kind, side };
 }
 
 // Per-market answer window (minutes), calibrated so neither YES nor NO is a
@@ -39,8 +43,8 @@ export function pickMarket(trigger: Trigger, side: 1 | 2, rng: () => number = Ma
 const WINDOWS: Record<MarketKind, number[]> = {
   goal: [4, 5, 6, 7, 8, 10],
   corner: [4, 5, 6, 7, 8],
-  shot: [1, 2, 3],
-  booking: [6, 8, 10, 12],
+  yellow: [6, 8, 10, 12],
+  red: [8, 10, 12],
 };
 export function pickWindow(kind: MarketKind, live = false, rng: () => number = Math.random): number {
   // Live: keep it snappy — 8 of 10 calls resolve in 2–4 min, occasionally longer.
@@ -55,7 +59,6 @@ export function pickWindow(kind: MarketKind, live = false, rng: () => number = M
 // A bet settles YES when a matching signal lands inside its window.
 export function marketMatches(betKind: MarketKind, betSide: Side, sig: MarketSignal): boolean {
   if (betKind !== sig.kind) return false;
-  if (betSide === 0) return true; // booking: either team counts
   return betSide === sig.side;
 }
 
@@ -64,8 +67,8 @@ export function marketQuestion(kind: MarketKind, teamName: string, mins: number)
   switch (kind) {
     case "goal": return `Will ${teamName} score in the next ${mins} ${w}?`;
     case "corner": return `Will ${teamName} win a corner in the next ${mins} ${w}?`;
-    case "shot": return `Will ${teamName} get a shot away in the next ${mins} ${w}?`;
-    case "booking": return `A booking in the next ${mins} ${w}?`;
+    case "yellow": return `Will ${teamName} pick up a yellow card in the next ${mins} ${w}?`;
+    case "red": return `Will ${teamName} get a red card in the next ${mins} ${w}?`;
   }
 }
 
@@ -73,8 +76,8 @@ export function marketLabel(kind: MarketKind, side: Side, teamName: string, mins
   switch (kind) {
     case "goal": return `${teamName} goal in ${mins}m`;
     case "corner": return `${teamName} corner in ${mins}m`;
-    case "shot": return `${teamName} shot in ${mins}m`;
-    case "booking": return `Booking in ${mins}m`;
+    case "yellow": return `${teamName} yellow in ${mins}m`;
+    case "red": return `${teamName} red in ${mins}m`;
   }
 }
 
@@ -82,7 +85,18 @@ export function marketHeader(kind: MarketKind): { icon: string; text: string } {
   switch (kind) {
     case "goal": return { icon: "⚡", text: "Goal chance" };
     case "corner": return { icon: "🚩", text: "Corner watch" };
-    case "shot": return { icon: "🎯", text: "Shot watch" };
-    case "booking": return { icon: "🟨", text: "Booking watch" };
+    case "yellow": return { icon: "🟨", text: "Yellow-card watch" };
+    case "red": return { icon: "🟥", text: "Red-card watch" };
   }
 }
+
+// Each market maps to exactly one on-chain TxLINE stat. statKey indexes the
+// per-side score stat (verified later via the validate_stat view); the side
+// selects Participant1 vs Participant2. These are the ONLY stats anchored
+// on-chain, which is why the four markets are limited to them.
+export const STAT_LABEL: Record<MarketKind, string> = {
+  goal: "Goals",
+  corner: "Corners",
+  yellow: "YellowCards",
+  red: "RedCards",
+};

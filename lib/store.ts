@@ -186,6 +186,11 @@ export function clearWallet() {
 // the server won't replay on reconnect, so they'd vanish on reload. We snapshot
 // the player-derived state (plus a score/clock seed to avoid a 0–0 flash) keyed
 // by fixture id, hydrate it on mount, and re-save it whenever it changes.
+// Cumulative match stats (the four on-chain-provable categories, per side).
+// Goals live in `score`; this carries corners + cards.
+export type MatchStats = { c1: number; c2: number; y1: number; y2: number; r1: number; r2: number };
+export const EMPTY_STATS: MatchStats = { c1: 0, c2: 0, y1: 0, y2: 0, r1: 0, r2: 0 };
+
 export type LiveRoomSnapshot = {
   bets: unknown[];
   events: unknown[];
@@ -194,6 +199,7 @@ export type LiveRoomSnapshot = {
   gameBets: number;
   bonusAwarded: boolean;
   score: { p1: number; p2: number };
+  stats?: MatchStats;
   shootout: { p1: number; p2: number } | null; // penalty shootout (PE), null if none
   sec: number;
   finished: boolean;

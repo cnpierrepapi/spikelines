@@ -10,8 +10,8 @@ export default function Intro() {
         <span className="text-primary">Call what happens next.</span>
       </h1>
       <p className="text-muted mt-6 max-w-xl text-lg leading-relaxed">
-        As a team builds an attack, a 5-second call fires — will they score, win a corner, or get
-        a shot away before the window closes? Tap YES / NO, build a streak, earn <span className="text-primary font-semibold">SPIKES</span>,
+        As a team builds an attack, a 5-second call fires — will they score, win a corner, or pick up
+        a card before the window closes? Tap YES / NO, build a streak, earn <span className="text-primary font-semibold">SPIKES</span>,
         and climb the leaderboard. Every outcome is settled on live World Cup data, verified on Solana.
       </p>
 
