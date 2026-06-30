@@ -14,6 +14,12 @@ import { AnchorProvider, Program, BN, type Idl } from "@coral-xyz/anchor";
 import bs58 from "bs58";
 import rawIdl from "./txline/idl/txoracle.json";
 
+// Anchor custom-error code → name (the simulate `err` only carries the number;
+// the name lives in the logs). Lets us classify a program error precisely.
+const ERR_BY_CODE: Record<number, string> = Object.fromEntries(
+  ((rawIdl as { errors?: { code: number; name: string }[] }).errors ?? []).map((e) => [e.code, e.name]),
+);
+
 // ── config ────────────────────────────────────────────────────────
 const RPC = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
 // Devnet txoracle program (the shipped IDL carries the mainnet address).
@@ -207,20 +213,28 @@ async function viewStat(b: StatBundle): Promise<{ ok: boolean; root: string; err
       .view();
     return { ok: result === true, root: pda.toBase58() };
   } catch (e) {
-    // Anchor surfaces the program error in message; the simulate infra error
-    // (fee payer etc.) lives on simulationResponse.err. Prefer whichever is set.
-    const sr = (e as { simulationResponse?: { err?: unknown } })?.simulationResponse?.err;
-    const msg = sr ? JSON.stringify(sr) : String((e as Error)?.message ?? e);
+    // The simulate `err` carries the program error as a NUMBER
+    // (InstructionError[_, {Custom: 6004}]); resolve it to its IDL name so we
+    // classify precisely. Fall back to the "Error Code: <Name>" log line, then
+    // the raw err / message (covers infra errors like the unfunded fee payer).
+    const sim = (e as { simulationResponse?: { err?: unknown; logs?: string[] } })?.simulationResponse;
+    const err = sim?.err as { InstructionError?: [number, { Custom?: number } | string] } | undefined;
+    const custom = err?.InstructionError?.[1];
+    const code = typeof custom === "object" && custom ? custom.Custom : undefined;
+    const fromLogs = (sim?.logs ?? []).join("\n").match(/Error Code:\s*(\w+)/)?.[1];
+    const name = (typeof code === "number" ? ERR_BY_CODE[code] : undefined) ?? fromLogs;
+    const msg = name ?? (sim?.err ? JSON.stringify(sim.err) : String((e as Error)?.message ?? e));
     return { ok: false, root: pda.toBase58(), error: classify(msg) };
   }
 }
 
+// Proof / time-slot mismatches: the root IS posted but our proof doesn't
+// reconcile to it (expected on the devnet replay feed). Surfaced as 'unprovable'.
+const MISMATCH_ERRORS = ["TimestampMismatch", "TimeSlotMismatch", "InvalidStatProof", "InvalidSubTreeProof", "InvalidFixtureSubTreeProof", "InvalidMainTreeProof"];
+
 function classify(msg: string): string {
   if (/RootNotAvailable/i.test(msg)) return "RootNotAvailable";
-  if (/TimestampMismatch/i.test(msg)) return "TimestampMismatch";
-  if (/InvalidStatProof/i.test(msg)) return "InvalidStatProof";
-  if (/InvalidSubTreeProof/i.test(msg)) return "InvalidSubTreeProof";
-  if (/InvalidMainTreeProof/i.test(msg)) return "InvalidMainTreeProof";
+  for (const n of MISMATCH_ERRORS) if (new RegExp(n, "i").test(msg)) return n;
   // Simulation-infra problems (fee payer not funded / stale blockhash) are NOT a
   // data failure — flag them so the bet stays 'pending', never 'failed'.
   if (/InvalidAccountForFee|AccountNotFound|BlockhashNotFound|account not found/i.test(msg)) return "SimInfra";
@@ -275,8 +289,7 @@ export async function verifyBet(args: {
     // cleanly (the live-regenerated proof can't match the stale on-chain root). We
     // do NOT brand that 'failed' — failed wrongly implies tampered data and would be
     // unfair to honest players. It's simply not provable on this network.
-    const merkle = ["TimestampMismatch", "InvalidMainTreeProof", "InvalidSubTreeProof", "InvalidStatProof"];
-    if (merkle.includes(vBase.error ?? "") || merkle.includes(vSettle.error ?? "")) {
+    if (MISMATCH_ERRORS.includes(vBase.error ?? "") || MISMATCH_ERRORS.includes(vSettle.error ?? "")) {
       return { status: "unprovable", root, valueBase, valueSettle, delta, recomputedYes, detail: `on-chain root doesn't reconcile (${vBase.error ?? vSettle.error}) — devnet replay fixture`, bundles };
     }
     return { status: "failed", root, valueBase, valueSettle, delta, recomputedYes, detail: `view failed (${vBase.error ?? vBase.ok}/${vSettle.error ?? vSettle.ok})`, bundles };
