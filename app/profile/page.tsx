@@ -4,9 +4,10 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   getBalance, getBets, getGames, getPlayed, leaderboardScore,
-  getWallet, saveWallet, clearWallet, isValidWallet,
+  getWallet, saveWallet, clearWallet,
   type StoredBet, type GameStat,
 } from "@/lib/store";
+import { detectWallets, connectWallet, signMessage, ownershipMessage, type WalletName } from "@/lib/wallet";
 
 const short = (a: string) => (a.length > 12 ? `${a.slice(0, 4)}…${a.slice(-4)}` : a);
 
@@ -18,9 +19,9 @@ export default function Profile() {
   const [played, setPlayed] = useState(0);
 
   const [wallet, setWallet] = useState("");
-  const [input, setInput] = useState("");
   const [err, setErr] = useState("");
-  const [connecting, setConnecting] = useState(false);
+  const [busy, setBusy] = useState<WalletName | null>(null);
+  const [installed, setInstalled] = useState<WalletName[]>([]);
 
   useEffect(() => {
     setBalance(getBalance());
@@ -29,6 +30,7 @@ export default function Profile() {
     setGames(getGames());
     setPlayed(getPlayed().length);
     setWallet(getWallet());
+    setInstalled(detectWallets());
   }, []);
 
   // Derived stats.
@@ -38,23 +40,28 @@ export default function Profile() {
   const earned = bets.reduce((s, b) => s + (b.status === "won" ? b.reward : 0), 0);
   const bestStreak = games.reduce((m, g) => Math.max(m, g.maxStreak), 0);
 
-  const link = (addr: string) => {
-    if (!isValidWallet(addr)) { setErr("That doesn't look like a Solana address."); return; }
-    if (saveWallet(addr)) { setWallet(addr); setInput(""); setErr(""); }
-  };
-
-  const connectPhantom = async () => {
+  // Connect → prove ownership: fetch a server nonce, sign it with the wallet,
+  // verify the signature server-side, then save the address. No pasted address
+  // is ever trusted — only a real signature links a payout wallet.
+  const connectAndVerify = async (name: WalletName) => {
     setErr("");
-    const sol = (typeof window !== "undefined" ? (window as unknown as { solana?: { isPhantom?: boolean; connect: () => Promise<{ publicKey: { toString(): string } }> } }).solana : undefined);
-    if (!sol?.isPhantom) { setErr("Phantom not detected — paste your address instead."); return; }
+    setBusy(name);
     try {
-      setConnecting(true);
-      const res = await sol.connect();
-      link(res.publicKey.toString());
-    } catch {
-      setErr("Wallet connection was cancelled.");
+      const { address } = await connectWallet(name);
+      const { nonce } = await fetch("/api/wallet/nonce").then((r) => r.json());
+      const signature = await signMessage(name, ownershipMessage(address, nonce));
+      const res = await fetch("/api/wallet/link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address, nonce, signature }),
+      }).then((r) => r.json());
+      if (!res.ok) throw new Error(res.error || "verification failed");
+      saveWallet(address);
+      setWallet(address);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Couldn't link wallet.");
     } finally {
-      setConnecting(false);
+      setBusy(null);
     }
   };
 
@@ -113,34 +120,21 @@ export default function Profile() {
             </div>
           ) : (
             <div className="flex flex-col gap-3">
-              <button
-                onClick={connectPhantom}
-                disabled={connecting}
-                className="w-full py-3 rounded-xl bg-primary text-background font-black gold-glow active:scale-95 transition disabled:opacity-60"
-              >
-                {connecting ? "Connecting…" : "Connect Phantom wallet"}
-              </button>
-              <div className="flex items-center gap-3 text-muted text-xs">
-                <div className="h-px flex-1 bg-white/10" /> or paste an address <div className="h-px flex-1 bg-white/10" />
-              </div>
-              <div className="flex gap-2">
-                <input
-                  value={input}
-                  onChange={(e) => { setInput(e.target.value); setErr(""); }}
-                  onKeyDown={(e) => e.key === "Enter" && link(input)}
-                  placeholder="Solana wallet address"
-                  spellCheck={false}
-                  className="flex-1 min-w-0 bg-white/5 border border-white/10 rounded-xl px-3 py-3 text-sm font-mono focus:border-primary/50 focus:outline-none"
-                />
-                <button
-                  onClick={() => link(input)}
-                  disabled={!input.trim()}
-                  className="px-4 rounded-xl bg-white/10 border border-white/10 font-bold text-sm active:scale-95 transition disabled:opacity-40"
-                >
-                  Link
-                </button>
-              </div>
-              {err && <p className="text-destructive text-xs">{err}</p>}
+              {(installed.length ? installed : (["Phantom", "Solflare", "Backpack"] as WalletName[])).map((name) => {
+                const isInstalled = installed.includes(name);
+                return (
+                  <button
+                    key={name}
+                    onClick={() => connectAndVerify(name)}
+                    disabled={!!busy}
+                    className={`w-full py-3 rounded-xl font-black active:scale-95 transition disabled:opacity-60 ${name === (installed[0] ?? "Phantom") ? "bg-primary text-background gold-glow" : "bg-white/5 border border-white/10 text-foreground"}`}
+                  >
+                    {busy === name ? "Confirm in your wallet…" : `Connect ${name}${isInstalled ? "" : " ↗"}`}
+                  </button>
+                );
+              })}
+              <p className="text-muted text-[11px] text-center">You&apos;ll be asked to sign a message — this proves you own the wallet. It&apos;s free and never moves funds.</p>
+              {err && <p className="text-destructive text-xs text-center">{err}</p>}
             </div>
           )}
         </div>
