@@ -169,11 +169,11 @@ function pdaForTs(ts: number): PublicKey {
   return pda;
 }
 
-// Run the validate_stat view for one stat bundle. We assert the bundle's stat
-// value against the on-chain root with an EqualTo predicate: a `true` result (no
-// program error) means the proof reconciles to the published root AND the value
-// is genuine. Returns { ok, root, error }.
-async function viewStat(b: StatBundle): Promise<{ ok: boolean; root: string; error?: string }> {
+// Build the validate_stat instruction args for one stat bundle. The `timestamp`
+// arg + PDA seed MUST be the batch/interval minTimestamp (not the per-event ts),
+// else the program rejects with TimestampMismatch (6010). EqualTo(value) makes the
+// returned bool == "the proof reconciles to the on-chain root".
+function buildArgs(b: StatBundle) {
   const pda = pdaForTs(b.summary.updateStats.minTimestamp);
   const statA = {
     statToProve: { key: b.statToProve.key, value: b.statToProve.value, period: b.statToProve.period },
@@ -190,41 +190,61 @@ async function viewStat(b: StatBundle): Promise<{ ok: boolean; root: string; err
     eventsSubTreeRoot: toBytes(b.summary.eventStatsSubTreeRoot),
   };
   const predicate = { threshold: b.statToProve.value, comparison: { equalTo: {} } };
-  // The program regenerates the daily-root PDA seed from the timestamp ARGUMENT and
-  // asserts it matches the snapshot payload — so it must be the batch/interval
-  // minTimestamp (same value used for the PDA), NOT the per-event ts. Passing b.ts
-  // for a multi-update interval fails with TimestampMismatch (6010).
   const targetTs = new BN(b.summary.updateStats.minTimestamp);
   const computeIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 });
+  return { pda, statA, fixtureSummary, predicate, targetTs, computeIx };
+}
+
+// The validate_stat method builder, ready for either .view() (simulate) or .rpc()
+// (land a real tx). Same instruction either way.
+function statMethod(b: StatBundle) {
+  const a = buildArgs(b);
+  const m = (program().methods as Record<string, (...args: unknown[]) => { accounts: (x: unknown) => { preInstructions: (ix: unknown[]) => unknown } }>)
+    .validateStat(a.targetTs, a.fixtureSummary, toNodes(b.subTreeProof), toNodes(b.mainTreeProof), a.predicate, a.statA, null, null)
+    .accounts({ dailyScoresMerkleRoots: a.pda })
+    .preInstructions([a.computeIx]);
+  return { m, root: a.pda.toBase58() };
+}
+
+// Resolve a program/sim error (works for both .view() simulationResponse and .rpc()
+// SendTransactionError) to a classified IDL error name. The program logs the
+// AnchorError name; we also map the numeric Custom code (decimal or hex) as backup.
+function extractErr(e: unknown): string {
+  const any = e as { simulationResponse?: { err?: unknown; logs?: string[] }; logs?: string[]; transactionLogs?: string[]; message?: string };
+  const logs = any.simulationResponse?.logs ?? any.logs ?? any.transactionLogs ?? [];
+  const fromLogs = logs.join("\n").match(/Error Code:\s*(\w+)/)?.[1];
+  const simErr = any.simulationResponse?.err as { InstructionError?: [number, { Custom?: number } | string] } | undefined;
+  const custom = simErr?.InstructionError?.[1];
+  const code = typeof custom === "object" && custom ? custom.Custom : undefined;
+  const hex = String(any.message ?? "").match(/custom program error:\s*0x([0-9a-f]+)/i)?.[1];
+  const byCode = typeof code === "number" ? ERR_BY_CODE[code] : hex ? ERR_BY_CODE[parseInt(hex, 16)] : undefined;
+  const name = fromLogs ?? byCode;
+  const msg = name ?? (simErr ? JSON.stringify(simErr) : String(any.message ?? e));
+  return classify(msg);
+}
+
+// Read-only preflight: does this stat reconcile to the on-chain root? `true` (no
+// program error) means yes. Used to decide whether a bet is anchorable.
+async function viewStat(b: StatBundle): Promise<{ ok: boolean; root: string; error?: string }> {
+  const { m, root } = statMethod(b);
   try {
-    const result = await (program().methods as Record<string, (...a: unknown[]) => { accounts: (a: unknown) => { preInstructions: (ix: unknown[]) => { view: () => Promise<unknown> } } }>)
-      .validateStat(
-        targetTs,
-        fixtureSummary,
-        toNodes(b.subTreeProof),
-        toNodes(b.mainTreeProof),
-        predicate,
-        statA,
-        null,
-        null,
-      )
-      .accounts({ dailyScoresMerkleRoots: pda })
-      .preInstructions([computeIx])
-      .view();
-    return { ok: result === true, root: pda.toBase58() };
+    const result = await (m as { view: () => Promise<unknown> }).view();
+    return { ok: result === true, root };
   } catch (e) {
-    // The simulate `err` carries the program error as a NUMBER
-    // (InstructionError[_, {Custom: 6004}]); resolve it to its IDL name so we
-    // classify precisely. Fall back to the "Error Code: <Name>" log line, then
-    // the raw err / message (covers infra errors like the unfunded fee payer).
-    const sim = (e as { simulationResponse?: { err?: unknown; logs?: string[] } })?.simulationResponse;
-    const err = sim?.err as { InstructionError?: [number, { Custom?: number } | string] } | undefined;
-    const custom = err?.InstructionError?.[1];
-    const code = typeof custom === "object" && custom ? custom.Custom : undefined;
-    const fromLogs = (sim?.logs ?? []).join("\n").match(/Error Code:\s*(\w+)/)?.[1];
-    const name = (typeof code === "number" ? ERR_BY_CODE[code] : undefined) ?? fromLogs;
-    const msg = name ?? (sim?.err ? JSON.stringify(sim.err) : String((e as Error)?.message ?? e));
-    return { ok: false, root: pda.toBase58(), error: classify(msg) };
+    return { ok: false, root, error: extractErr(e) };
+  }
+}
+
+// LAND a real validate_stat transaction (signed + fee-paid by the funded wallet) —
+// the on-chain receipt. Succeeds only if the proof reconciles; the signature IS the
+// proof. Returns the tx signature or a classified error.
+async function landStat(b: StatBundle): Promise<{ sig?: string; root: string; error?: string }> {
+  const { m, root } = statMethod(b);
+  try {
+    const sig = await (m as { rpc: (o?: unknown) => Promise<string> }).rpc({ commitment: "confirmed" });
+    return { sig, root };
+  } catch (e) {
+    return { root, error: extractErr(e) };
   }
 }
 
@@ -305,4 +325,76 @@ export async function verifyBet(args: {
 // the basis for a claw-back.
 export function canonicalOutcome(choice: "YES" | "NO", recomputedYes: boolean): "won" | "lost" {
   return (choice === "YES") === recomputedYes ? "won" : "lost";
+}
+
+export type AnchorResult = {
+  ok: boolean;
+  status: ProofStatus;
+  root: string | null;
+  baseSig: string | null;
+  settleSig: string | null; // the headline receipt (window close)
+  valueBase: number | null;
+  valueSettle: number | null;
+  delta: number | null;
+  recomputedYes: boolean | null;
+  detail: string;
+};
+
+// Whether an on-chain signer is configured (a funded secret key). Anchoring needs
+// it; the read-only preflight does not.
+export function canAnchor(): boolean {
+  return !!SIM_SECRET;
+}
+
+// ANCHOR a bet on-chain: land a real validate_stat tx for BOTH window endpoints,
+// signed + fee-paid by the funded wallet. The signatures are the immutable proof
+// that those exact stats reconcile to the on-chain Merkle root. Anchor's preflight
+// simulation rejects a non-reconciling proof BEFORE landing (no SOL spent), so a
+// non-verifiable bet returns an error, never a bogus signature.
+export async function anchorBet(args: {
+  fid: number;
+  statKey: number;
+  baseTs: number;
+  settleTs: number;
+}): Promise<AnchorResult> {
+  const empty: AnchorResult = { ok: false, status: "pending", root: null, baseSig: null, settleSig: null, valueBase: null, valueSettle: null, delta: null, recomputedYes: null, detail: "" };
+  if (!SIM_SECRET) return { ...empty, detail: "no on-chain signer configured (set SOLANA_SIM_PAYER_SECRET)" };
+  const headers = txHeaders();
+  if (!headers) return { ...empty, detail: "txline not configured" };
+
+  try {
+    const idx = await seqIndex(args.fid, headers);
+    const baseSeq = seqAt(idx, args.baseTs);
+    const settleSeq = seqAt(idx, args.settleTs);
+    if (baseSeq == null || settleSeq == null) return { ...empty, detail: "no feed seq for window" };
+
+    const [bBase, bSettle] = await Promise.all([
+      statValidation(args.fid, baseSeq, args.statKey, headers),
+      statValidation(args.fid, settleSeq, args.statKey, headers),
+    ]);
+    const valueBase = bBase.statToProve.value;
+    const valueSettle = bSettle.statToProve.value;
+    const delta = valueSettle - valueBase;
+    const recomputedYes = delta > 0;
+
+    // Land the settle endpoint first (the headline receipt), then the base.
+    const settle = await landStat(bSettle);
+    const base = await landStat(bBase);
+    const root = settle.root;
+    const out = { root, valueBase, valueSettle, delta, recomputedYes };
+
+    if (settle.sig && base.sig) {
+      return { ...out, ok: true, status: "verified", baseSig: base.sig, settleSig: settle.sig, detail: "anchored on-chain ✓ both endpoints" };
+    }
+    const err = settle.error ?? base.error;
+    if (err === "RootNotAvailable") {
+      return { ...empty, ...out, status: "unprovable", detail: "on-chain root not posted yet" };
+    }
+    if (MISMATCH_ERRORS.includes(err ?? "")) {
+      return { ...empty, ...out, status: "unprovable", detail: `on-chain root doesn't reconcile (${err}) — devnet replay fixture` };
+    }
+    return { ...empty, ...out, baseSig: base.sig ?? null, settleSig: settle.sig ?? null, status: "failed", detail: `anchor failed (${base.error ?? base.sig}/${settle.error ?? settle.sig})` };
+  } catch (e) {
+    return { ...empty, detail: classify(String((e as Error)?.message ?? e)) };
+  }
 }

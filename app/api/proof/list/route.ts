@@ -15,7 +15,7 @@ export async function GET(request: Request) {
   const outcome = url.searchParams.get("outcome"); // won | lost
   const status = url.searchParams.get("status"); // verified | unprovable | ...
 
-  const cols = "id,device_id,username,fixture_id,match,mode,market,side,stat_key,mins,choice,outcome,reward,base_ts,settle_ts,proof_status,proof_root,reverted,revert_reason,created_at";
+  const cols = "id,device_id,username,fixture_id,match,mode,market,side,stat_key,mins,choice,outcome,reward,base_ts,settle_ts,proof_status,proof_root,proof_tx,reverted,revert_reason,created_at";
   const q: string[] = [`select=${cols}`, "order=created_at.desc", `limit=${limit}`, `offset=${offset}`];
   if (fixture) q.push(`fixture_id=eq.${encodeURIComponent(fixture)}`);
   if (outcome === "won" || outcome === "lost") q.push(`outcome=eq.${outcome}`);
