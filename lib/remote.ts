@@ -62,6 +62,35 @@ export async function verifyPack(signature: string, packId: string): Promise<{ o
   }
 }
 
+// Persist a settled bet to the public proof ledger + verify it on-chain. Best-
+// effort and fire-and-forget — gameplay never waits on it.
+export type SettleBet = {
+  client_bet_id: number;
+  fixture_id: number;
+  match: string;
+  mode: "live" | "archived";
+  market: string;
+  side: 1 | 2;
+  mins: number;
+  choice: "YES" | "NO";
+  outcome: "won" | "lost";
+  reward: number;
+  base_ts?: number;
+  settle_ts?: number;
+};
+export function settleBet(b: SettleBet): void {
+  const device_id = getDeviceId();
+  if (!device_id) return;
+  try {
+    void fetch("/api/bets/settle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...b, device_id, username: getUsername() }),
+      keepalive: true, // survive a page navigation right after a final-whistle settle
+    });
+  } catch {}
+}
+
 export async function requestWithdraw(): Promise<{ ok: boolean; queued?: number; error?: string }> {
   try {
     const r = await fetch("/api/rewards/withdraw", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ device_id: getDeviceId() }) });

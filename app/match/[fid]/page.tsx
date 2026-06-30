@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { recordBet, addBalance, hasPlayed, markPlayed, getBalance, streakSaveCost, buyStreakSave, recordGameStats, buyReplay, REPLAY_COST, EMPTY_STATS, type MatchStats } from "@/lib/store";
 import { celebrateFrom } from "@/lib/celebrate";
+import { settleBet } from "@/lib/remote";
 import { MatchStatsPanel } from "@/components/match-stats";
 import { type MarketKind, type Side, type Trigger, sideOf, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
@@ -22,7 +23,7 @@ type Rec = {
 };
 type Entry = { fid: number; p1: string; p2: string; iso1: string; iso2: string; minutes: number };
 type Prompt = { id: number; sec: number; mins: number; market: MarketKind; side: Side; question: string; answered: null | "YES" | "NO" };
-type Bet = { id: number; market: MarketKind; side: Side; mins: number; choice: "YES" | "NO"; deadlineSec: number; status: "open" | "won" | "lost"; label: string };
+type Bet = { id: number; market: MarketKind; side: Side; mins: number; choice: "YES" | "NO"; deadlineSec: number; status: "open" | "won" | "lost"; label: string; baseTs: number };
 
 const TIER: Record<Tier, { reach: number; color: string; label: string }> = {
   safe: { reach: 6, color: "#2f5f99", label: "settled" },
@@ -91,6 +92,7 @@ export default function ReplayMatch() {
   const shootoutRef = useRef(false); // once the shootout starts, no more in-play prompts
   shootoutRef.current = !!shootout;
   const secRef = useRef(0);
+  const lastTsRef = useRef(0); // most recent feed record Ts (ms) — the proof window key
   const cooldownSec = useRef(0);
   const highCooldownSec = useRef(0);
   const promptRef = useRef<Prompt | null>(null);
@@ -147,7 +149,9 @@ export default function ReplayMatch() {
       if (b.status !== "open") continue;
       const win = b.choice === "NO";
       b.status = win ? "won" : "lost";
-      recordBet({ id: b.id, match: `${entryRef.current?.p1 ?? "?"}–${entryRef.current?.p2 ?? "?"}`, mins: b.mins, choice: b.choice, status: b.status, reward: win ? ARCHIVED_REWARD : 0, at: Date.now() });
+      const matchName = `${entryRef.current?.p1 ?? "?"}–${entryRef.current?.p2 ?? "?"}`;
+      recordBet({ id: b.id, match: matchName, mins: b.mins, choice: b.choice, status: b.status, reward: win ? ARCHIVED_REWARD : 0, at: Date.now() });
+      settleBet({ client_bet_id: b.id, fixture_id: fid, match: matchName, mode: "archived", market: b.market, side: b.side, mins: b.mins, choice: b.choice, outcome: b.status, reward: win ? ARCHIVED_REWARD : 0, base_ts: b.baseTs, settle_ts: lastTsRef.current });
       if (win) {
         addBalance(ARCHIVED_REWARD);
         setSpotr((v) => v + ARCHIVED_REWARD);
@@ -159,7 +163,7 @@ export default function ReplayMatch() {
       changed = true;
     }
     if (changed) setBets(betsRef.current.slice());
-  }, []);
+  }, [fid]);
 
   // Settle open bets: a matching signal settles YES-as-win; elapsed window → NO-win.
   const settle = useCallback(
@@ -174,7 +178,9 @@ export default function ReplayMatch() {
         if (win === null) continue;
         b.status = win ? "won" : "lost";
         applyResult(win);
-        recordBet({ id: b.id, match: `${entryRef.current?.p1 ?? "?"}–${entryRef.current?.p2 ?? "?"}`, mins: b.mins, choice: b.choice, status: b.status, reward: win ? ARCHIVED_REWARD : 0, at: Date.now() });
+        const matchName = `${entryRef.current?.p1 ?? "?"}–${entryRef.current?.p2 ?? "?"}`;
+        recordBet({ id: b.id, match: matchName, mins: b.mins, choice: b.choice, status: b.status, reward: win ? ARCHIVED_REWARD : 0, at: Date.now() });
+        settleBet({ client_bet_id: b.id, fixture_id: fid, match: matchName, mode: "archived", market: b.market, side: b.side, mins: b.mins, choice: b.choice, outcome: b.status, reward: win ? ARCHIVED_REWARD : 0, base_ts: b.baseTs, settle_ts: lastTsRef.current });
         if (win) {
           addBalance(ARCHIVED_REWARD);
           const id = b.id;
@@ -186,7 +192,7 @@ export default function ReplayMatch() {
       }
       if (changed) setBets(betsRef.current.slice());
     },
-    [applyResult]
+    [applyResult, fid]
   );
 
   const addEvent = useCallback((icon: string, label: string) => {
@@ -218,7 +224,7 @@ export default function ReplayMatch() {
       const p = promptRef.current;
       if (!p || p.answered) return;
       setPrompt({ ...p, answered: choice });
-      const bet: Bet = { id: p.id, market: p.market, side: p.side, mins: p.mins, choice, deadlineSec: p.sec + p.mins * 60, status: "open", label: marketLabel(p.market, p.side, teamName(p.side), p.mins) };
+      const bet: Bet = { id: p.id, market: p.market, side: p.side, mins: p.mins, choice, deadlineSec: p.sec + p.mins * 60, status: "open", label: marketLabel(p.market, p.side, teamName(p.side), p.mins), baseTs: lastTsRef.current };
       betsRef.current = [bet, ...betsRef.current].slice(0, 12);
       setBets(betsRef.current.slice());
       markPlayed(fid); // first call consumes this match (one-shot-per-match)
@@ -262,6 +268,7 @@ export default function ReplayMatch() {
 
   const process = useCallback(
     (r: Rec) => {
+      if (typeof r.Ts === "number") lastTsRef.current = r.Ts; // feed timestamp → proof window key
       if (r.Clock) {
         setClock(r.Clock);
         secRef.current = r.Clock.Seconds;

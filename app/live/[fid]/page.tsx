@@ -5,13 +5,14 @@ import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { recordBet, addBalance, markPlayed, getBalance, streakSaveCost, buyStreakSave, recordGameStats, getLiveRoom, saveLiveRoom, EMPTY_STATS, type MatchStats } from "@/lib/store";
 import { celebrateFrom } from "@/lib/celebrate";
+import { settleBet } from "@/lib/remote";
 import { MatchStatsPanel } from "@/components/match-stats";
 import { type MarketKind, type Side, type Trigger, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
 type Tier = "safe" | "attack" | "danger" | "high_danger";
 type Clock = { Running: boolean; Seconds: number };
 type Prompt = { id: number; sec: number; mins: number; market: MarketKind; side: Side; question: string; answered: null | "YES" | "NO" };
-type Bet = { id: number; market: MarketKind; side: Side; mins: number; choice: "YES" | "NO"; deadlineSec: number; status: "open" | "won" | "lost"; label: string };
+type Bet = { id: number; market: MarketKind; side: Side; mins: number; choice: "YES" | "NO"; deadlineSec: number; status: "open" | "won" | "lost"; label: string; baseTs: number };
 type LiveEntry = { fid: number; p1: string; p2: string; iso1: string; iso2: string };
 type Evt = { id: number; icon: string; label: string; min: number };
 
@@ -69,6 +70,7 @@ export default function LiveMatch() {
   const shootoutRef = useRef(false); // once the shootout starts, no more in-play prompts
   shootoutRef.current = !!shootout;
   const secRef = useRef(0);
+  const lastTsRef = useRef(0); // newest feed record Ts (ms) from the stream — proof window key
   // Monotonic clock anchor: re-anchored only by a FORWARD server reading, then
   // interpolated locally each second so the ticker keeps moving through poll
   // gaps/dropouts and a stale snapshot can never drag the timer backwards.
@@ -171,7 +173,9 @@ export default function LiveMatch() {
       if (b.status !== "open") continue;
       const win = b.choice === "NO";
       b.status = win ? "won" : "lost";
-      recordBet({ id: b.id, match: `${entryRef.current?.p1 ?? "?"}–${entryRef.current?.p2 ?? "?"}`, mins: b.mins, choice: b.choice, status: b.status, reward: win ? LIVE_REWARD : 0, at: Date.now() });
+      const matchName = `${entryRef.current?.p1 ?? "?"}–${entryRef.current?.p2 ?? "?"}`;
+      recordBet({ id: b.id, match: matchName, mins: b.mins, choice: b.choice, status: b.status, reward: win ? LIVE_REWARD : 0, at: Date.now() });
+      settleBet({ client_bet_id: b.id, fixture_id: fid, match: matchName, mode: "live", market: b.market, side: b.side, mins: b.mins, choice: b.choice, outcome: b.status, reward: win ? LIVE_REWARD : 0, base_ts: b.baseTs, settle_ts: lastTsRef.current });
       if (win) {
         addBalance(LIVE_REWARD);
         setSpotr((v) => v + LIVE_REWARD);
@@ -183,7 +187,7 @@ export default function LiveMatch() {
       changed = true;
     }
     if (changed) setBets(betsRef.current.slice());
-  }, []);
+  }, [fid]);
 
   // Live can't pause, so a streak-save offer auto-declines after a short window.
   useEffect(() => {
@@ -206,7 +210,9 @@ export default function LiveMatch() {
         if (win === null) continue;
         b.status = win ? "won" : "lost";
         applyResult(win);
-        recordBet({ id: b.id, match: `${entryRef.current?.p1 ?? "?"}–${entryRef.current?.p2 ?? "?"}`, mins: b.mins, choice: b.choice, status: b.status, reward: win ? LIVE_REWARD : 0, at: Date.now() });
+        const matchName = `${entryRef.current?.p1 ?? "?"}–${entryRef.current?.p2 ?? "?"}`;
+        recordBet({ id: b.id, match: matchName, mins: b.mins, choice: b.choice, status: b.status, reward: win ? LIVE_REWARD : 0, at: Date.now() });
+        settleBet({ client_bet_id: b.id, fixture_id: fid, match: matchName, mode: "live", market: b.market, side: b.side, mins: b.mins, choice: b.choice, outcome: b.status, reward: win ? LIVE_REWARD : 0, base_ts: b.baseTs, settle_ts: lastTsRef.current });
         if (win) {
           addBalance(LIVE_REWARD);
           const id = b.id;
@@ -218,7 +224,7 @@ export default function LiveMatch() {
       }
       if (changed) setBets(betsRef.current.slice());
     },
-    [applyResult]
+    [applyResult, fid]
   );
 
   // Spawn a prompt for an incoming feed signal. Guarantees the bet window: only
@@ -241,7 +247,7 @@ export default function LiveMatch() {
     const p = promptRef.current;
     if (!p || p.answered) return;
     setPrompt({ ...p, answered: choice });
-    const bet: Bet = { id: p.id, market: p.market, side: p.side, mins: p.mins, choice, deadlineSec: p.sec + p.mins * 60, status: "open", label: marketLabel(p.market, p.side, teamName(p.side), p.mins) };
+    const bet: Bet = { id: p.id, market: p.market, side: p.side, mins: p.mins, choice, deadlineSec: p.sec + p.mins * 60, status: "open", label: marketLabel(p.market, p.side, teamName(p.side), p.mins), baseTs: lastTsRef.current };
     betsRef.current = [bet, ...betsRef.current].slice(0, 12);
     setBets(betsRef.current.slice());
     markPlayed(fid); // first call consumes this match (one-shot-per-match)
@@ -331,6 +337,7 @@ export default function LiveMatch() {
       if (ev.t === "ready") return;
       setSeen(true);
       if (ev.clock) applyClock(ev.clock);
+      if (typeof ev.ts === "number" && ev.ts > 0) lastTsRef.current = ev.ts;
       if (ev.t === "momentum") {
         setTier(ev.tier);
         setAttacker(ev.participant);

@@ -18,6 +18,7 @@ export default function Intro() {
       <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
         <Link href="/play" className="px-7 py-3.5 rounded-xl bg-primary text-background font-black gold-glow text-lg">Start playing →</Link>
         <Link href="/leaderboard" className="px-5 py-3.5 rounded-xl border border-white/10 text-foreground font-bold hover:border-primary/40 transition">Leaderboard</Link>
+        <Link href="/proof" className="px-5 py-3.5 rounded-xl border border-white/10 text-foreground font-bold hover:border-primary/40 transition">Proof ledger</Link>
         <Link href="/litepaper" className="px-5 py-3.5 rounded-xl border border-white/10 text-muted font-bold hover:border-white/30 transition">Litepaper</Link>
       </div>
 

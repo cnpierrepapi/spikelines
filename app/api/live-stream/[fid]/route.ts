@@ -84,7 +84,9 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
         let overturn = false;
         let lastScore: any = null, lastScoreTs = -1;
         let pe1 = 0, pe2 = 0;
+        let maxTs = 0; // newest feed record timestamp this poll — the proof window key
         for (const rr of arr) {
+          if (typeof rr.Ts === "number" && rr.Ts > maxTs) maxTs = rr.Ts;
           if (rr.Action === "game_finalised") finishedNow = true;
           if (rr.Action === "action_discarded") overturn = true;
           if (rr.Action === "var_end" && rr.Data?.Outcome === "Overturned") overturn = true;
@@ -132,10 +134,10 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
             prev.g1 = cur.g1 = lg1;
             prev.g2 = cur.g2 = lg2;
           }
-          send({ t: "score", score: { p1: Math.max(prev.g1, cur.g1), p2: Math.max(prev.g2, cur.g2) }, clock });
+          send({ t: "score", score: { p1: Math.max(prev.g1, cur.g1), p2: Math.max(prev.g2, cur.g2) }, clock, ts: maxTs });
           const bump = (k: keyof typeof cur, kind: string, side: 1 | 2) => {
             if (cur[k] > prev[k]) {
-              if (prev.started) send({ t: "stat", kind, side, clock });
+              if (prev.started) send({ t: "stat", kind, side, clock, ts: maxTs });
               prev[k] = cur[k]; // raise the baseline ONLY on a real increase
             }
           };
@@ -155,7 +157,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
         // Meter follows possession.
         if (possRec && possTs !== prev.possTs) {
           prev.possTs = possTs;
-          send({ t: "momentum", tier: POSS[possRec.Action as string], participant: sideOf(possRec.Participant), clock });
+          send({ t: "momentum", tier: POSS[possRec.Action as string], participant: sideOf(possRec.Participant), clock, ts: maxTs });
         }
 
         // Shot event = settlement signal for the shot market (no Score.Total).
@@ -166,7 +168,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
 
         // Scoring chance → prompt opportunity, tagged with trigger + attacking side.
         if (chanceRec && chanceTs !== prev.chanceTs) {
-          if (prev.started) send({ t: "chance", trigger: TRIGGER[chanceRec.Action as string], side: sideOf(chanceRec.Participant), clock });
+          if (prev.started) send({ t: "chance", trigger: TRIGGER[chanceRec.Action as string], side: sideOf(chanceRec.Participant), clock, ts: maxTs });
           prev.chanceTs = chanceTs;
         }
 
@@ -174,7 +176,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
         if (penTs > prev.penTs) { if (prev.started) send({ t: "feed", kind: "penalty", clock }); prev.penTs = penTs; }
         if (varTs > prev.varTs) { if (prev.started) send({ t: "feed", kind: "var", clock }); prev.varTs = varTs; }
         if (subTs > prev.subTs) { if (prev.started) send({ t: "feed", kind: "sub", side: subRec?.Data?.Participant === 2 ? 2 : 1, clock }); prev.subTs = subTs; }
-        if (finishedNow && !prev.finished) { send({ t: "finished" }); prev.finished = true; }
+        if (finishedNow && !prev.finished) { send({ t: "finished", ts: maxTs }); prev.finished = true; }
         prev.started = true;
       }
 

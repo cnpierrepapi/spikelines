@@ -100,3 +100,12 @@ export const STAT_LABEL: Record<MarketKind, string> = {
   yellow: "YellowCards",
   red: "RedCards",
 };
+
+// TxLINE on-chain stat key for each market, per side (1 = Participant1, 2 =
+// Participant2). Derived from the live feed's stat map: 1/2 = Goals, 3/4 =
+// YellowCards, 5/6 = RedCards, 7/8 = Corners. These are the keys passed to the
+// /api/scores/stat-validation proof endpoint and the validate_stat view.
+const STAT_KEY_BASE: Record<MarketKind, number> = { goal: 1, yellow: 3, red: 5, corner: 7 };
+export function statKeyFor(kind: MarketKind, side: 1 | 2): number {
+  return STAT_KEY_BASE[kind] + (side - 1);
+}
