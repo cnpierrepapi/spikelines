@@ -18,6 +18,12 @@ export async function POST(req: Request) {
       { p_device: device_id, p_username: username, p_score: score, p_spikes: spikes, p_wallet: wallet }
     );
     const player = Array.isArray(rows) ? rows[0] : rows;
+    // Snapshot today's cumulative score so the daily reward engine can compute
+    // improvement (today − yesterday). Best-effort: never fail the sync over it.
+    try {
+      const day = new Date().toISOString().slice(0, 10);
+      await supaRpc("spk_snapshot_daily", { p_device: device_id, p_day: day, p_score: score });
+    } catch { /* snapshot is non-critical to the sync response */ }
     return Response.json({ ok: true, player });
   } catch (e) {
     // Unique-violation on the case-insensitive username index → name taken.

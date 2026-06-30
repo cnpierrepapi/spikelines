@@ -23,6 +23,7 @@ export default function Leaderboard() {
   const [balance, setBalance] = useState(0);
   const [me, setMe] = useState("");
   const [live, setLive] = useState<LeaderRow[] | null>(null); // real players, null until loaded
+  const [todayPool, setTodayPool] = useState<number | null>(null); // revealed daily reward pool
 
   useEffect(() => {
     const g = getGames();
@@ -32,6 +33,8 @@ export default function Leaderboard() {
     setMe(getUsername());
     // Push our latest score up, then pull the real board.
     syncProfile().then(() => fetchLeaderboard()).then((r) => setLive(r.ok ? r.players : []));
+    // Today's revealed reward pool (admin sets it; shown to players on the day).
+    fetch("/api/rewards/today").then((r) => r.json()).then((j) => { if (j?.ok && j.pool != null) setTodayPool(Number(j.pool)); }).catch(() => {});
   }, []);
 
   type Row = { name: string; score: number; you?: boolean };
@@ -69,6 +72,17 @@ export default function Leaderboard() {
         <h1 className="text-3xl font-black mb-1">Leaderboard</h1>
         <p className="text-muted text-sm mb-2">Ranked by <span className="text-foreground font-semibold">streak accuracy</span> — top performers share the weekly USDC pool.</p>
         <p className="text-muted text-xs mb-6 font-mono">score = Σ (max streak ÷ calls × 100) per match &nbsp;·&nbsp; e.g. 40/80 + 20/50 = 50 + 25 = 75 &nbsp;·&nbsp; matches with &lt;{MIN_BETS_FOR_HIGH} calls cap at {LOW_SAMPLE_CAP} pts</p>
+
+        {/* Today's revealed reward pool */}
+        {todayPool != null && todayPool > 0 && (
+          <div className="card-surface gold-glow rounded-2xl p-4 mb-6 flex items-center justify-between">
+            <div>
+              <div className="text-[11px] uppercase tracking-widest text-muted">Today&apos;s reward pool</div>
+              <div className="text-2xl font-black text-primary tabular-nums">${todayPool.toFixed(2)} <span className="text-muted text-xs font-normal">USDC</span></div>
+            </div>
+            <p className="text-muted text-[11px] max-w-[55%] text-right">Top 10% share 30% · biggest daily improvers share 70%. Climb before EOD.</p>
+          </div>
+        )}
 
         {/* Your score + per-match breakdown */}
         <div className="card-surface rounded-2xl p-5 mb-6">
