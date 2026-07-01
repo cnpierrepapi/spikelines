@@ -54,11 +54,19 @@ export type BetProof = {
 };
 
 // ── TxLINE REST ───────────────────────────────────────────────────
-function txHeaders(): Record<string, string> | null {
-  const jwt = process.env.TXLINE_JWT;
+// The apiToken is the durable credential; the guest JWT is a short-lived session
+// that expires in ~30 days. Mint a fresh one per sweep so the cron never goes
+// stale (env TXLINE_JWT still overrides if explicitly set).
+async function txHeaders(): Promise<Record<string, string> | null> {
   const tok = process.env.TXLINE_API_TOKEN;
-  if (!jwt || !tok) return null;
-  return { Authorization: `Bearer ${jwt}`, "X-Api-Token": tok };
+  if (!tok) return null;
+  try {
+    const jwt = process.env.TXLINE_JWT || (await (await fetch(`${TXLINE_BASE}/auth/guest/start`, { method: "POST" })).json()).token;
+    if (!jwt) return null;
+    return { Authorization: `Bearer ${jwt}`, "X-Api-Token": tok };
+  } catch {
+    return null;
+  }
 }
 
 // Lightweight per-fixture index of {seq, ts}, so we can map a window timestamp to
@@ -286,7 +294,7 @@ export async function verifyBet(args: {
   settleTs: number;
 }): Promise<BetProof> {
   const empty: BetProof = { status: "pending", root: null, valueBase: null, valueSettle: null, delta: null, recomputedYes: null, detail: "" };
-  const headers = txHeaders();
+  const headers = await txHeaders();
   if (!headers) return { ...empty, detail: "txline not configured" };
 
   try {
@@ -374,7 +382,7 @@ export async function anchorBet(args: {
 }): Promise<AnchorResult> {
   const empty: AnchorResult = { ok: false, status: "pending", root: null, baseSig: null, settleSig: null, valueBase: null, valueSettle: null, delta: null, recomputedYes: null, detail: "" };
   if (!SIM_SECRET) return { ...empty, detail: "no on-chain signer configured (set SOLANA_SIM_PAYER_SECRET)" };
-  const headers = txHeaders();
+  const headers = await txHeaders();
   if (!headers) return { ...empty, detail: "txline not configured" };
 
   try {
