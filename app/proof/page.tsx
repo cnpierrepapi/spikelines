@@ -7,7 +7,7 @@
 // A bet whose root isn't posted / doesn't reconcile can't be proven, so its button
 // is greyed out. Nothing here is taken on trust.
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type Bet = {
   id: number;
@@ -27,6 +27,7 @@ type Bet = {
   reverted: boolean;
   revert_reason: string | null;
   created_at: string;
+  recheckable?: boolean; // proof not final + not terminal → worth an auto re-check
 };
 type Fixture = { fixture_id: number; match: string };
 type Result = { txSig?: string | null; status?: string; detail?: string; delta?: number | null; reverted?: boolean; clawed?: number; revertReason?: string | null };
@@ -60,6 +61,9 @@ export default function ProofPage() {
   const [outcome, setOutcome] = useState("");
   const [busy, setBusy] = useState<number | null>(null);
   const [results, setResults] = useState<Record<number, Result>>({});
+  const [watching, setWatching] = useState(false);
+  const betsRef = useRef<Bet[]>([]);
+  const sweepingRef = useRef(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,6 +83,70 @@ export default function ProofPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Keep a ref of the current bets so the interval sweep sees fresh data without
+  // being re-created on every state change.
+  useEffect(() => {
+    betsRef.current = bets;
+  }, [bets]);
+
+  // AUTOMATIC availability watcher. A bet settles greyed because TxLINE hasn't
+  // posted its on-chain root yet; the root shows up minutes later. Rather than make
+  // a human tap every greyed button, we periodically re-run the read-only check
+  // (no tx, no SOL) for the still-open bets and un-grey the ones whose root has
+  // since become available. Terminal bets (won't reconcile) report recheckable=false
+  // and are skipped, so we don't poll them forever.
+  const autoSweep = useCallback(async () => {
+    if (sweepingRef.current) return;
+    const targets = betsRef.current.filter((b) => b.recheckable && !b.proof_tx && b.proof_status !== "verified");
+    if (targets.length === 0) return;
+    sweepingRef.current = true;
+    setWatching(true);
+    try {
+      const CONC = 3;
+      for (let i = 0; i < targets.length; i += CONC) {
+        const chunk = targets.slice(i, i + CONC);
+        await Promise.all(
+          chunk.map(async (b) => {
+            try {
+              const j = await fetch("/api/proof/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: b.id }) }).then((r) => r.json());
+              if (!j.ok) return;
+              // Still re-checkable only while the root remains unposted; a verified,
+              // failed, or "doesn't reconcile" verdict is terminal → stop sweeping it.
+              const stillOpen = j.status === "pending" || (j.status === "unprovable" && /not posted yet/i.test(j.detail || ""));
+              setBets((bs) =>
+                bs.map((x) =>
+                  x.id === b.id
+                    ? {
+                        ...x,
+                        proof_status: j.status,
+                        proof_root: j.root ?? x.proof_root,
+                        recheckable: stillOpen,
+                        ...(j.clawed > 0 ? { outcome: "lost" as const, reward: 0, reverted: true, revert_reason: j.revertReason ?? x.revert_reason } : {}),
+                      }
+                    : x,
+                ),
+              );
+            } catch {}
+          }),
+        );
+      }
+    } finally {
+      sweepingRef.current = false;
+      setWatching(false);
+    }
+  }, []);
+
+  // Sweep shortly after load, then every 60s while the page is open. Each check is a
+  // free .view(); anchoring (the paid .rpc tx) still only happens on an explicit tap.
+  useEffect(() => {
+    const first = setTimeout(autoSweep, 1500);
+    const iv = setInterval(autoSweep, 60_000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(iv);
+    };
+  }, [autoSweep]);
 
   // Anchor on-chain: land the real validate_stat tx and capture the signature.
   const anchor = async (id: number) => {
@@ -133,6 +201,7 @@ export default function ProofPage() {
         </p>
         <p className="text-xs text-muted mb-5">
           {loading ? "loading…" : `${bets.length} calls shown · ${anchoredCount} anchored on-chain`}
+          {watching && <span className="text-primary"> · ⛓ checking the chain for new proofs…</span>}
         </p>
 
         <div className="flex flex-wrap gap-2 mb-5">

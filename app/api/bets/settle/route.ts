@@ -4,7 +4,7 @@
 //
 // nodejs runtime: the verifier uses @coral-xyz/anchor + @solana/web3.js.
 import { statKeyFor, type MarketKind } from "@/lib/markets";
-import { verifyBet } from "@/lib/proof";
+import { verifyBet, isRetryable } from "@/lib/proof";
 import { supaUpsert, supaReady } from "@/lib/supa";
 
 export const runtime = "nodejs";
@@ -44,15 +44,20 @@ export async function POST(request: Request) {
 
   // Verify inline. Never let a verification hiccup block the ledger write — on any
   // failure the row still lands as 'pending' and can be re-verified later.
-  let proof = { status: "pending" as string, root: null as string | null, json: null as unknown };
+  let proof = { status: "pending" as string, root: null as string | null, json: null as unknown, detail: "" };
   if (typeof b.base_ts === "number" && typeof b.settle_ts === "number") {
     try {
       const r = await verifyBet({ fid: b.fixture_id, statKey, baseTs: b.base_ts, settleTs: b.settle_ts });
-      proof = { status: r.status, root: r.root, json: { detail: r.detail, valueBase: r.valueBase, valueSettle: r.valueSettle, delta: r.delta, recomputedYes: r.recomputedYes, bundles: r.bundles } };
+      proof = { status: r.status, root: r.root, json: { detail: r.detail, valueBase: r.valueBase, valueSettle: r.valueSettle, delta: r.delta, recomputedYes: r.recomputedYes, bundles: r.bundles }, detail: r.detail };
     } catch (e) {
-      proof = { status: "pending", root: null, json: { detail: String((e as Error)?.message ?? e) } };
+      proof = { status: "pending", root: null, json: { detail: String((e as Error)?.message ?? e) }, detail: "" };
     }
   }
+  // At settle the root usually isn't posted yet → 'pending'/'unprovable' and the
+  // background sweep should poll it. Only a terminal verdict skips the sweep.
+  const nextCheck = proof.status === "verified" || !isRetryable(proof.status as never, proof.detail)
+    ? "infinity"
+    : new Date().toISOString();
 
   const row = {
     device_id: b.device_id,
@@ -74,6 +79,7 @@ export async function POST(request: Request) {
     proof_root: proof.root,
     proof_json: proof.json,
     verified_at: proof.status === "verified" ? new Date().toISOString() : null,
+    next_check_at: nextCheck,
   };
 
   try {

@@ -15,14 +15,24 @@ export async function GET(request: Request) {
   const outcome = url.searchParams.get("outcome"); // won | lost
   const status = url.searchParams.get("status"); // verified | unprovable | ...
 
-  const cols = "id,device_id,username,fixture_id,match,mode,market,side,stat_key,mins,choice,outcome,reward,base_ts,settle_ts,proof_status,proof_root,proof_tx,reverted,revert_reason,created_at";
+  const cols = "id,device_id,username,fixture_id,match,mode,market,side,stat_key,mins,choice,outcome,reward,base_ts,settle_ts,proof_status,proof_root,proof_tx,reverted,revert_reason,created_at,next_check_at";
   const q: string[] = [`select=${cols}`, "order=created_at.desc", `limit=${limit}`, `offset=${offset}`];
   if (fixture) q.push(`fixture_id=eq.${encodeURIComponent(fixture)}`);
   if (outcome === "won" || outcome === "lost") q.push(`outcome=eq.${outcome}`);
   if (status) q.push(`proof_status=eq.${encodeURIComponent(status)}`);
 
   try {
-    const bets = await supaGet<Record<string, unknown>[]>(`spk_bets?${q.join("&")}`);
+    const rows = await supaGet<Record<string, unknown>[]>(`spk_bets?${q.join("&")}`);
+    // A bet is worth auto-re-checking when its proof isn't final yet and it hasn't
+    // been marked terminal ('infinity'). The client sweep uses this to un-grey
+    // buttons the moment a root posts, without polling done/dead bets.
+    const bets = rows.map((r) => ({
+      ...r,
+      recheckable:
+        (r.proof_status === "pending" || r.proof_status === "unprovable") &&
+        !r.proof_tx &&
+        String(r.next_check_at ?? "") !== "infinity",
+    }));
     // Distinct fixtures (for the filter dropdown) — a small separate read.
     const fxRows = await supaGet<{ fixture_id: number; match: string }[]>(`spk_bets?select=fixture_id,match&order=created_at.desc&limit=400`);
     const seen = new Map<number, string>();

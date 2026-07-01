@@ -3,7 +3,7 @@
 // verdict + the on-chain root account (so the UI can link it to the explorer).
 // Also refreshes the stored proof_status so a once-'pending'/'unprovable' bet can
 // settle to 'verified' once the root is posted.
-import { verifyBet, canonicalOutcome } from "@/lib/proof";
+import { verifyBet, canonicalOutcome, isRetryable } from "@/lib/proof";
 import { supaGet, supaPatch, supaRpc, supaReady } from "@/lib/supa";
 
 export const runtime = "nodejs";
@@ -68,12 +68,19 @@ export async function POST(request: Request) {
 
   // Persist the refreshed verdict (best-effort). On an overturn we also rewrite the
   // ledger outcome to the proven truth so the public ledger never shows a phantom win.
+  // Keep the sweep schedule coherent: a verified/terminal verdict stops future
+  // polling ('infinity'); a still-pending root gets a short re-check window (the
+  // background sweep owns the real backoff curve via check_attempts).
+  const nextCheck = r.status === "verified" || !isRetryable(r.status, r.detail)
+    ? "infinity"
+    : new Date(Date.now() + 120_000).toISOString();
   try {
     await supaPatch(`spk_bets?id=eq.${id}`, {
       proof_status: r.status,
       proof_root: r.root,
       proof_json: { detail: r.detail, valueBase: r.valueBase, valueSettle: r.valueSettle, delta: r.delta, recomputedYes: r.recomputedYes, bundles: r.bundles },
       verified_at: r.status === "verified" ? new Date().toISOString() : null,
+      next_check_at: nextCheck,
       ...(clawed > 0 ? { outcome: "lost", reward: 0, reverted: true, revert_reason: revertReason } : {}),
     });
   } catch {}

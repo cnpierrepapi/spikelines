@@ -1,0 +1,59 @@
+// Test reconciliation for a list of fixtures at a spread of seqs. Honest probe of
+// what the playable lobby actually verifies.
+import { readFileSync } from "node:fs";
+import { Connection, PublicKey, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
+import bs58 from "bs58";
+import anchor from "@coral-xyz/anchor";
+const { AnchorProvider, Program, BN } = anchor;
+for (const line of readFileSync(new URL("../.env.local", import.meta.url), "utf8").split("\n")) {
+  const m = line.match(/^([A-Z_]+)=(.*)$/); if (m) process.env[m[1]] = m[2].trim();
+}
+const BASE = process.env.TXLINE_API_BASE, JWT = process.env.TXLINE_JWT, TOK = process.env.TXLINE_API_TOKEN;
+const headers = { Authorization: `Bearer ${JWT}`, "X-Api-Token": TOK };
+const PROGRAM_ID = new PublicKey("6pW64gN1s2uqjHkn1unFeEjAwJkPGHoppGvS715wyP2J");
+const SECRET = readFileSync(new URL("../../Downloads/env.txt", import.meta.url), "utf8").trim();
+const conn = new Connection("https://api.devnet.solana.com", "confirmed");
+const idl = JSON.parse(readFileSync(new URL("../lib/txline/idl/txoracle.json", import.meta.url), "utf8"));
+idl.address = PROGRAM_ID.toBase58();
+const vs = idl.instructions.find((i) => i.name === "validate_stat"); if (vs && !vs.returns) vs.returns = "bool";
+const kp = Keypair.fromSecretKey(bs58.decode(SECRET));
+const sign = (tx) => { try { tx.partialSign(kp); } catch {} return tx; };
+const program = new Program(idl, new AnchorProvider(conn, { publicKey: kp.publicKey, signTransaction: async (t) => sign(t), signAllTransactions: async (ts) => ts.map(sign) }, { commitment: "confirmed" }));
+const toBytes = (v) => (Array.isArray(v) ? v : Array.from(Buffer.from(v, "base64")));
+const toNodes = (ns) => ns.map((n) => ({ hash: toBytes(n.hash), isRightSibling: n.isRightSibling }));
+
+const FIDS = [
+  [17588323, "NZ v BEL"], [17588402, "PAN v ENG"], [17588245, "CRO v GHA"],
+  [17588309, "EGY v IRN"], [17588404, "URU v ESP"], [17588314, "CPV v KSA"], [17588391, "COL v POR"],
+];
+
+async function viewAt(fid, seq) {
+  const b = await (await fetch(`${BASE}/api/scores/stat-validation?fixtureId=${fid}&seq=${seq}&statKey=1`, { headers })).json();
+  if (!b?.statToProve) return "no-stat";
+  const minTs = b.summary.updateStats.minTimestamp;
+  const day = Buffer.alloc(2); day.writeUInt16LE(Math.floor(minTs / 86_400_000), 0);
+  const [pda] = PublicKey.findProgramAddressSync([Buffer.from("daily_scores_roots"), day], PROGRAM_ID);
+  const statA = { statToProve: b.statToProve, eventStatRoot: toBytes(b.eventStatRoot), statProof: toNodes(b.statProof) };
+  const fixtureSummary = { fixtureId: new BN(b.summary.fixtureId), updateStats: { updateCount: b.summary.updateStats.updateCount, minTimestamp: new BN(minTs), maxTimestamp: new BN(b.summary.updateStats.maxTimestamp) }, eventsSubTreeRoot: toBytes(b.summary.eventStatsSubTreeRoot) };
+  const predicate = { threshold: b.statToProve.value, comparison: { equalTo: {} } };
+  try {
+    const out = await program.methods.validateStat(new BN(minTs), fixtureSummary, toNodes(b.subTreeProof), toNodes(b.mainTreeProof), predicate, statA, null, null).accounts({ dailyScoresMerkleRoots: pda }).preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 })]).view();
+    return out === true ? "VIEW=true" : `VIEW=${out}`;
+  } catch (e) {
+    const code = e?.simulationResponse?.err?.InstructionError?.[1]?.Custom;
+    const errs = (idl.errors || []).find((x) => x.code === code);
+    return errs ? errs.name : (e?.simulationResponse?.err ? JSON.stringify(e.simulationResponse.err) : (e?.message || "err").slice(0, 40));
+  }
+}
+
+for (const [fid, name] of FIDS) {
+  const t = await (await fetch(`${BASE}/api/scores/updates/${fid}`, { headers })).text();
+  const seqs = [];
+  for (const l of t.split("\n")) { if (!l.startsWith("data:")) continue; try { const o = JSON.parse(l.slice(5).trim()); if (typeof o.Seq === "number") seqs.push(o.Seq); } catch {} }
+  const uniq = [...new Set(seqs)].sort((a, b) => a - b);
+  if (!uniq.length) { console.log(`${name} (${fid}): NO score records`); continue; }
+  const picks = [0.4, 0.7, 0.99].map((p) => uniq[Math.floor(uniq.length * p)]);
+  const res = [];
+  for (const s of picks) res.push(`${s}:${await viewAt(fid, s)}`);
+  console.log(`${name} (${fid}): ${uniq.length} recs · ${res.join("  ")}`);
+}

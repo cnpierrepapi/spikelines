@@ -261,6 +261,21 @@ function classify(msg: string): string {
   return msg.slice(0, 140) || "unknown";
 }
 
+// Should the availability sweep re-check this verdict later, or is it terminal?
+// Only "the root isn't posted YET" is worth polling:
+//   pending                        → transient (unfunded sim payer, no feed seq yet) → retry
+//   unprovable + "not posted yet"  → RootNotAvailable: the interval root will post later → retry
+//   unprovable + "doesn't reconcile" (mismatch) → root IS posted but the devnet-replay
+//                                    proof can't match it → NEVER flips → terminal
+//   verified / failed              → terminal
+// Distinguishing the two 'unprovable' cases by detail keeps us from polling devnet
+// fixtures forever (they'd 404-free re-check on every sweep otherwise).
+export function isRetryable(status: ProofStatus, detail: string): boolean {
+  if (status === "pending") return true;
+  if (status === "unprovable") return /not posted yet/i.test(detail);
+  return false;
+}
+
 // ── public entrypoint ─────────────────────────────────────────────
 // Verify one window bet end-to-end. `baseTs`/`settleTs` are the feed timestamps
 // (ms) at the window's open and close; `statKey` is the per-side on-chain key.

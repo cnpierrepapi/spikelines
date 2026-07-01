@@ -5,7 +5,7 @@
 // verifiable bet. Idempotent: a bet already anchored returns its stored signature
 // (never double-spends). If the proof reconciles but contradicts a recorded win,
 // the unearned SPIKES are clawed back (dispute resolution).
-import { anchorBet, canonicalOutcome } from "@/lib/proof";
+import { anchorBet, canonicalOutcome, isRetryable } from "@/lib/proof";
 import { supaGet, supaPatch, supaRpc, supaReady } from "@/lib/supa";
 
 export const runtime = "nodejs";
@@ -47,10 +47,12 @@ export async function POST(request: Request) {
 
   const r = await anchorBet({ fid: bet.fixture_id, statKey: bet.stat_key, baseTs: bet.base_ts, settleTs: bet.settle_ts });
 
-  // Not anchorable → report why; persist the refreshed (non-verified) status.
+  // Not anchorable → report why; persist the refreshed (non-verified) status. A
+  // terminal verdict (won't reconcile) stops the sweep from re-polling it.
   if (!r.ok || !r.settleSig) {
+    const nextCheck = isRetryable(r.status, r.detail) ? new Date(Date.now() + 120_000).toISOString() : "infinity";
     try {
-      await supaPatch(`spk_bets?id=eq.${id}`, { proof_status: r.status, proof_root: r.root });
+      await supaPatch(`spk_bets?id=eq.${id}`, { proof_status: r.status, proof_root: r.root, next_check_at: nextCheck });
     } catch {}
     return Response.json({ ok: false, status: r.status, root: r.root, detail: r.detail }, { status: 409 });
   }
