@@ -33,8 +33,10 @@ type Fixture = { fixture_id: number; match: string };
 type Result = { txSig?: string | null; status?: string; detail?: string; delta?: number | null; reverted?: boolean; clawed?: number; revertReason?: string | null };
 
 const MARKET_ICON: Record<Bet["market"], string> = { goal: "⚽", corner: "🚩", yellow: "🟨", red: "🟥" };
-const explorerAddr = (a: string) => `https://explorer.solana.com/address/${a}?cluster=devnet`;
-const explorerTx = (s: string) => `https://explorer.solana.com/tx/${s}?cluster=devnet`;
+// Proofs land on Solana MAINNET (the production oracle where real WC roots
+// reconcile), so explorer links target mainnet-beta (the default cluster).
+const explorerAddr = (a: string) => `https://explorer.solana.com/address/${a}`;
+const explorerTx = (s: string) => `https://explorer.solana.com/tx/${s}`;
 
 function teamOf(match: string, side: 1 | 2): string {
   const parts = match.split("–");
@@ -193,11 +195,13 @@ export default function ProofPage() {
         <h1 className="text-3xl font-black mb-1">Proof ledger</h1>
         <p className="text-muted text-sm leading-relaxed mb-1">
           Every settled call, from every player. When a result reconciles to TxLINE&apos;s World Cup
-          scores — anchored on <span className="text-foreground">Solana</span> as a Merkle root — its{" "}
-          <span className="text-foreground font-semibold">Verify</span> button lights up. Tap it to{" "}
-          <span className="text-foreground font-semibold">land a real <span className="font-mono text-primary">validate_stat</span> transaction</span>{" "}
-          on-chain and get a transaction hash you can open in a Solana explorer. Greyed = not anchored
-          on-chain (root not posted, or doesn&apos;t reconcile). No trust required.
+          scores — anchored on <span className="text-foreground">Solana mainnet</span> as a Merkle root — we{" "}
+          <span className="text-foreground font-semibold">automatically land a real{" "}
+          <span className="font-mono text-primary">validate_stat</span> transaction</span> on-chain and
+          show its hash — an immutable receipt you can open in any Solana explorer. Proofs appear{" "}
+          <span className="text-foreground">within minutes</span> of each window closing (once TxLINE posts
+          the root). Greyed = root not posted yet. No trust required — you can also tap{" "}
+          <span className="text-foreground font-semibold">Verify</span> to re-check any call yourself.
         </p>
         <p className="text-xs text-muted mb-5">
           {loading ? "loading…" : `${bets.length} calls shown · ${anchoredCount} anchored on-chain`}
@@ -280,7 +284,7 @@ export default function ProofPage() {
                   <div className="mt-2 pt-2 border-t border-white/5 flex items-center justify-between gap-2 text-[11px]">
                     <span className={`truncate ${b.reverted ? "text-destructive" : "text-muted"}`}>
                       {res?.revertReason || (b.reverted ? b.revert_reason : null) ||
-                        (anchored ? "anchored on-chain ✓" : res?.detail || (b.proof_status === "verified" ? "reconciles — tap Verify to anchor" : "not anchored on-chain"))}
+                        (anchored ? "anchored on-chain ✓" : res?.detail || (b.proof_status === "verified" ? "reconciles — anchoring on-chain…" : "not anchored on-chain"))}
                       {res?.delta != null && <span className="text-foreground"> · Δ{res.delta}</span>}
                     </span>
                     {anchored ? (

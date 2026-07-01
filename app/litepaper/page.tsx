@@ -23,7 +23,10 @@ export default function Litepaper() {
             <span className="text-primary font-black text-xl tracking-tight">SPIKES</span>
             <span className="text-muted text-sm">· Spikelines</span>
           </Link>
-          <Link href="/play" className="text-sm text-muted hover:text-foreground">Play</Link>
+          <div className="flex items-center gap-3">
+            <Link href="/play" className="text-sm text-muted hover:text-foreground">Play</Link>
+            <Link href="/proof" className="text-sm text-primary hover:text-foreground font-semibold">⛓ Proof</Link>
+          </div>
         </div>
       </nav>
 
