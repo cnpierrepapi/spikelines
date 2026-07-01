@@ -10,7 +10,7 @@
 // 404-ing endpoint and don't re-poll devnet fixtures that will never reconcile.
 //
 // Drive it on an interval (a /loop that curls this route, or any external cron).
-import { verifyBet, canonicalOutcome, isRetryable } from "@/lib/proof";
+import { verifyBet, canonicalOutcome, isRetryable, anchorBet, canAnchor } from "@/lib/proof";
 import { supaGet, supaPatch, supaRpc, supaReady } from "@/lib/supa";
 
 export const runtime = "nodejs";
@@ -18,10 +18,17 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 // How many bets to re-check per sweep, and how many .view() checks to run at once.
-// verifyBet does 2 REST calls + 2 devnet simulations, so keep both modest to stay
+// verifyBet does 2 REST calls + 2 mainnet simulations, so keep both modest to stay
 // inside maxDuration.
 const BATCH = 12;
 const CONCURRENCY = 3;
+// AUTO-ANCHOR: when a bet verifies, land its real validate_stat tx automatically so
+// /proof shows the on-chain receipt without a user click. Bounded per run (each
+// anchor lands 2 txs and confirms, ~seconds) and capped at PROOF_SPEND_CAP_SOL.
+const ANCHOR_PER_RUN = 3;
+const CAP_LAMPORTS = Math.round(Number(process.env.PROOF_SPEND_CAP_SOL || "1.4") * 1e9);
+const PER_BET_LAMPORTS = 10_000; // two validate_stat txs (~5000 each)
+type AnchorBudget = { left: number; canSpend: () => boolean; spend: () => void };
 // Exponential backoff (minutes) between re-checks, and the attempt count past which
 // we give up and stop polling (roots that haven't posted in ~hours never will).
 const GIVE_UP_AFTER = 12;
@@ -42,9 +49,10 @@ type Row = {
   reward: number;
   reverted: boolean;
   check_attempts: number;
+  proof_tx: string | null;
 };
 
-async function sweepOne(bet: Row) {
+async function sweepOne(bet: Row, budget: AnchorBudget) {
   // Missing window timestamps can never be proven → mark terminal so we drop it.
   if (bet.base_ts == null || bet.settle_ts == null) {
     await supaPatch(`spk_bets?id=eq.${bet.id}`, { next_check_at: FOREVER }).catch(() => {});
@@ -79,6 +87,17 @@ async function sweepOne(bet: Row) {
     }
   }
 
+  // AUTO-ANCHOR: on verify, land the real tx automatically (no user click) so
+  // /proof shows the on-chain receipt. Bounded per run + capped at 1.4 SOL; if the
+  // budget is spent it stays verified-by-view and a later sweep lands the tx.
+  let proofTx = bet.proof_tx;
+  if (r.status === "verified" && !proofTx && canAnchor() && budget.left > 0 && budget.canSpend()) {
+    try {
+      const a = await anchorBet({ fid: bet.fixture_id, statKey: bet.stat_key, baseTs: bet.base_ts, settleTs: bet.settle_ts });
+      if (a.ok && a.settleSig) { proofTx = a.settleSig; budget.spend(); }
+    } catch { /* a later sweep retries the anchor */ }
+  }
+
   await supaPatch(`spk_bets?id=eq.${bet.id}`, {
     proof_status: r.status,
     proof_root: r.root,
@@ -86,15 +105,16 @@ async function sweepOne(bet: Row) {
     verified_at: r.status === "verified" ? new Date().toISOString() : null,
     check_attempts: attempts,
     next_check_at: nextCheck,
+    ...(proofTx && proofTx !== bet.proof_tx ? { proof_tx: proofTx } : {}),
     ...(clawed > 0 ? { outcome: "lost", reward: 0, reverted: true, revert_reason: revertReason } : {}),
   }).catch(() => {});
 
-  return { id: bet.id, status: r.status, flipped: r.status === "verified", clawed, reverted };
+  return { id: bet.id, status: r.status, flipped: r.status === "verified", anchored: !!proofTx && proofTx !== bet.proof_tx, clawed, reverted };
 }
 
 async function runSweep() {
   const nowIso = new Date().toISOString();
-  const cols = "id,device_id,fixture_id,stat_key,base_ts,settle_ts,choice,outcome,reward,reverted,check_attempts";
+  const cols = "id,device_id,fixture_id,stat_key,base_ts,settle_ts,choice,outcome,reward,reverted,check_attempts,proof_tx";
   const q = [
     `select=${cols}`,
     "proof_status=in.(pending,unprovable)",
@@ -104,17 +124,28 @@ async function runSweep() {
   ].join("&");
   const due = await supaGet<Row[]>(`spk_bets?${q}`);
 
+  // Spend so far = already-anchored bets × per-bet cost; gate auto-anchoring on the cap.
+  const anchored = await supaGet<{ id: number }[]>(`spk_bets?select=id&proof_tx=not.is.null`);
+  let spent = anchored.length * PER_BET_LAMPORTS;
+  const budget: AnchorBudget = {
+    left: ANCHOR_PER_RUN,
+    canSpend: () => spent + PER_BET_LAMPORTS <= CAP_LAMPORTS,
+    spend: () => { spent += PER_BET_LAMPORTS; budget.left--; },
+  };
+
   const results: Awaited<ReturnType<typeof sweepOne>>[] = [];
   for (let i = 0; i < due.length; i += CONCURRENCY) {
     const chunk = due.slice(i, i + CONCURRENCY);
-    results.push(...(await Promise.all(chunk.map(sweepOne))));
+    results.push(...(await Promise.all(chunk.map((b) => sweepOne(b, budget)))));
   }
   return {
     ok: true,
     due: due.length,
     checked: results.length,
     flipped: results.filter((r) => r.flipped).length,
+    anchored: results.filter((r) => r.anchored).length,
     clawed: results.filter((r) => (r.clawed ?? 0) > 0).length,
+    spentSol: spent / 1e9,
     results,
   };
 }
