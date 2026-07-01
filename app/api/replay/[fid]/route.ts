@@ -24,7 +24,7 @@ export async function GET(_request: Request, ctx: { params: Promise<{ fid: strin
   const { fid: fidStr } = await ctx.params;
   const fid = Number(fidStr);
   const base = process.env.TXLINE_API_BASE;
-  const jwt = process.env.TXLINE_JWT;
+  const jwt = await (await import("@/lib/txline-auth")).mintJwt(base);
   const apiToken = process.env.TXLINE_API_TOKEN;
   if (!base || !jwt || !apiToken) return Response.json({ recs: [], error: "not configured" }, { status: 503 });
   const headers = { Authorization: `Bearer ${jwt}`, "X-Api-Token": apiToken };

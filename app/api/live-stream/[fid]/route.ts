@@ -35,7 +35,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ fid: string
   const { fid: fidStr } = await ctx.params;
   const fid = Number(fidStr);
   const base = process.env.TXLINE_API_BASE;
-  const jwt = process.env.TXLINE_JWT;
+  const jwt = await (await import("@/lib/txline-auth")).mintJwt(base);
   const apiToken = process.env.TXLINE_API_TOKEN;
   const encoder = new TextEncoder();
 

@@ -12,7 +12,7 @@ const AHEAD_MS = 3 * 24 * 60 * 60 * 1000;
 
 export async function GET() {
   const base = process.env.TXLINE_API_BASE;
-  const jwt = process.env.TXLINE_JWT;
+  const jwt = await (await import("@/lib/txline-auth")).mintJwt(base);
   const apiToken = process.env.TXLINE_API_TOKEN;
   if (!base || !jwt || !apiToken) return Response.json({ configured: false, fixtures: [] });
   try {
