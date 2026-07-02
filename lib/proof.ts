@@ -13,6 +13,7 @@ import { Connection, PublicKey, Keypair, ComputeBudgetProgram } from "@solana/we
 import { AnchorProvider, Program, BN, type Idl } from "@coral-xyz/anchor";
 import bs58 from "bs58";
 import rawIdl from "./txline/idl/txoracle.json";
+import { independentPair } from "./independent-verify";
 
 // Anchor custom-error code → name (the simulate `err` only carries the number;
 // the name lives in the logs). Lets us classify a program error precisely.
@@ -312,9 +313,15 @@ export async function verifyBet(args: {
     const delta = valueSettle - valueBase;
     const recomputedYes = delta > 0;
 
+    // Gate 1 — our OWN Merkle recompute (no program, no wallet, free). Proves the
+    // stat value belongs to the fixture's committed sub-tree; validate_stat below
+    // is Gate 2 (the on-chain anchor). Threaded through bundles so every verdict
+    // branch carries it.
+    const independent = independentPair(bBase, bSettle);
+
     const [vBase, vSettle] = await Promise.all([viewStat(bBase), viewStat(bSettle)]);
     const root = vSettle.root;
-    const bundles = { base: { seq: baseSeq, ...bBase, view: vBase }, settle: { seq: settleSeq, ...bSettle, view: vSettle } };
+    const bundles = { base: { seq: baseSeq, ...bBase, view: vBase }, settle: { seq: settleSeq, ...bSettle, view: vSettle }, independent };
 
     if (vBase.ok && vSettle.ok) {
       return { status: "verified", root, valueBase, valueSettle, delta, recomputedYes, detail: "validate_stat ✓ both endpoints", bundles };
@@ -361,6 +368,7 @@ export type AnchorResult = {
   delta: number | null;
   recomputedYes: boolean | null;
   detail: string;
+  independent?: ReturnType<typeof independentPair>;
 };
 
 // Whether an on-chain signer is configured (a funded secret key). Anchoring needs
@@ -399,12 +407,14 @@ export async function anchorBet(args: {
     const valueSettle = bSettle.statToProve.value;
     const delta = valueSettle - valueBase;
     const recomputedYes = delta > 0;
+    // Gate 1: independent recompute alongside the on-chain anchor (Gate 2).
+    const independent = independentPair(bBase, bSettle);
 
     // Land the settle endpoint first (the headline receipt), then the base.
     const settle = await landStat(bSettle);
     const base = await landStat(bBase);
     const root = settle.root;
-    const out = { root, valueBase, valueSettle, delta, recomputedYes };
+    const out = { root, valueBase, valueSettle, delta, recomputedYes, independent };
 
     if (settle.sig && base.sig) {
       return { ...out, ok: true, status: "verified", baseSig: base.sig, settleSig: settle.sig, detail: "anchored on-chain ✓ both endpoints" };

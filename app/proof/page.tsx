@@ -30,7 +30,8 @@ type Bet = {
   recheckable?: boolean; // proof not final + not terminal → worth an auto re-check
 };
 type Fixture = { fixture_id: number; match: string };
-type Result = { txSig?: string | null; status?: string; detail?: string; delta?: number | null; reverted?: boolean; clawed?: number; revertReason?: string | null };
+type Independent = { ok: boolean; detail?: string; baseOk?: boolean; settleOk?: boolean };
+type Result = { txSig?: string | null; status?: string; detail?: string; delta?: number | null; reverted?: boolean; clawed?: number; revertReason?: string | null; independent?: Independent | null };
 
 const MARKET_ICON: Record<Bet["market"], string> = { goal: "⚽", corner: "🚩", yellow: "🟨", red: "🟥" };
 // Proofs land on Solana MAINNET (the production oracle where real WC roots
@@ -156,7 +157,7 @@ export default function ProofPage() {
     try {
       const j = await fetch("/api/proof/anchor", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) }).then((r) => r.json());
       if (j.ok) {
-        setResults((r) => ({ ...r, [id]: { txSig: j.settleSig, status: "verified", delta: j.delta, reverted: j.reverted, clawed: j.clawed, revertReason: j.revertReason } }));
+        setResults((r) => ({ ...r, [id]: { txSig: j.settleSig, status: "verified", delta: j.delta, reverted: j.reverted, clawed: j.clawed, revertReason: j.revertReason, independent: j.independent ?? null } }));
         setBets((bs) => bs.map((b) => (b.id === id
           ? { ...b, proof_status: "verified", proof_tx: j.settleSig ?? b.proof_tx, reverted: !!j.reverted, revert_reason: j.revertReason ?? b.revert_reason, ...(j.clawed > 0 ? { outcome: "lost" as const, reward: 0 } : {}) }
           : b)));
@@ -175,7 +176,7 @@ export default function ProofPage() {
     try {
       const j = await fetch("/api/proof/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) }).then((r) => r.json());
       if (j.ok) {
-        setResults((r) => ({ ...r, [id]: { status: j.status, detail: j.detail, delta: j.delta } }));
+        setResults((r) => ({ ...r, [id]: { status: j.status, detail: j.detail, delta: j.delta, independent: j.independent ?? null } }));
         setBets((bs) => bs.map((b) => (b.id === id ? { ...b, proof_status: j.status, proof_root: j.root ?? b.proof_root } : b)));
       }
     } catch {}
@@ -202,6 +203,15 @@ export default function ProofPage() {
           <span className="text-foreground">within minutes</span> of each window closing (once TxLINE posts
           the root). Greyed = root not posted yet. No trust required — you can also tap{" "}
           <span className="text-foreground font-semibold">Verify</span> to re-check any call yourself.
+        </p>
+        <p className="text-xs text-muted leading-relaxed mb-1">
+          Two independent gates back every result.{" "}
+          <span className="text-foreground font-semibold">Gate&nbsp;1</span> — we rebuild TxLINE&apos;s Merkle
+          proof ourselves in the browser/server (<span className="font-mono">sha256</span>, no Anchor program,
+          no wallet) and confirm the stat value matches their published sub-tree root; it catches a tampered
+          value that <span className="font-mono text-primary">validate_stat</span> alone would take on trust.{" "}
+          <span className="text-foreground font-semibold">Gate&nbsp;2</span> — <span className="font-mono text-primary">validate_stat</span>{" "}
+          anchors that sub-tree to the on-chain daily root. You see both verdicts per call.
         </p>
         <p className="text-xs text-muted mb-5">
           {loading ? "loading…" : `${bets.length} calls shown · ${anchoredCount} anchored on-chain`}
@@ -281,21 +291,32 @@ export default function ProofPage() {
                   </div>
                 </div>
                 {(res || b.proof_root || b.proof_tx || b.reverted) && (
-                  <div className="mt-2 pt-2 border-t border-white/5 flex items-center justify-between gap-2 text-[11px]">
-                    <span className={`truncate ${b.reverted ? "text-destructive" : "text-muted"}`}>
-                      {res?.revertReason || (b.reverted ? b.revert_reason : null) ||
-                        (anchored ? "anchored on-chain ✓" : res?.detail || (b.proof_status === "verified" ? "reconciles — anchoring on-chain…" : "not anchored on-chain"))}
-                      {res?.delta != null && <span className="text-foreground"> · Δ{res.delta}</span>}
-                    </span>
-                    {anchored ? (
-                      <a href={explorerTx(txSig!)} target="_blank" rel="noreferrer" className="text-success font-mono shrink-0 hover:underline">
-                        {txSig!.slice(0, 4)}…{txSig!.slice(-4)} ↗
-                      </a>
-                    ) : b.proof_root ? (
-                      <a href={explorerAddr(b.proof_root)} target="_blank" rel="noreferrer" className="text-muted font-mono shrink-0 hover:underline">
-                        root {b.proof_root.slice(0, 4)}…{b.proof_root.slice(-4)} ↗
-                      </a>
-                    ) : null}
+                  <div className="mt-2 pt-2 border-t border-white/5 text-[11px] space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`truncate ${b.reverted ? "text-destructive" : "text-muted"}`}>
+                        {res?.revertReason || (b.reverted ? b.revert_reason : null) ||
+                          (anchored ? "anchored on-chain ✓" : res?.detail || (b.proof_status === "verified" ? "reconciles — anchoring on-chain…" : "not anchored on-chain"))}
+                        {res?.delta != null && <span className="text-foreground"> · Δ{res.delta}</span>}
+                      </span>
+                      {anchored ? (
+                        <a href={explorerTx(txSig!)} target="_blank" rel="noreferrer" className="text-success font-mono shrink-0 hover:underline">
+                          {txSig!.slice(0, 4)}…{txSig!.slice(-4)} ↗
+                        </a>
+                      ) : b.proof_root ? (
+                        <a href={explorerAddr(b.proof_root)} target="_blank" rel="noreferrer" className="text-muted font-mono shrink-0 hover:underline">
+                          root {b.proof_root.slice(0, 4)}…{b.proof_root.slice(-4)} ↗
+                        </a>
+                      ) : null}
+                    </div>
+                    {res?.independent && (
+                      <div className="flex items-center gap-1.5 text-[10px] font-mono">
+                        <span className={res.independent.ok ? "text-success" : "text-destructive"}>
+                          {res.independent.ok ? "🔎 Gate 1 independent recompute ✓" : "🔎 Gate 1 recompute ✗"}
+                        </span>
+                        <span className="text-muted/50">·</span>
+                        <span className="text-muted">our own sha256 Merkle, no program — Gate 2 anchors it on-chain</span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

@@ -43,6 +43,11 @@ export async function POST(request: Request) {
 
   const r = await verifyBet({ fid: bet.fixture_id, statKey: bet.stat_key, baseTs: bet.base_ts, settleTs: bet.settle_ts });
 
+  // Gate 1 verdict (our independent sha256 Merkle recompute), lifted out of the
+  // bundle so the /proof UI can show it beside the on-chain (Gate 2) badge.
+  const ind = (r.bundles as { independent?: { ok: boolean; base?: { ok: boolean; detail: string }; settle?: { ok: boolean } } } | undefined)?.independent;
+  const independent = ind ? { ok: ind.ok, detail: ind.base?.detail ?? "", baseOk: ind.base?.ok ?? false, settleOk: ind.settle?.ok ?? false } : null;
+
   // Dispute resolution: a proof that fully reconciles to the on-chain root is
   // authoritative. If it proves a recorded WIN should have been a loss, the SPIKES
   // it paid were unearned → claw them back from the server-authoritative balance
@@ -94,6 +99,7 @@ export async function POST(request: Request) {
     delta: r.delta,
     recomputedYes: r.recomputedYes,
     detail: r.detail,
+    independent,
     reverted,
     clawed,
     revertReason,

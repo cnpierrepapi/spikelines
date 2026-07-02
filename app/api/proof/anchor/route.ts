@@ -95,6 +95,7 @@ export async function POST(request: Request) {
     txUrl: txUrl(r.settleSig),
     delta: r.delta,
     recomputedYes: r.recomputedYes,
+    independent: r.independent ? { ok: r.independent.ok, detail: r.independent.base?.detail ?? "", baseOk: r.independent.base?.ok ?? false, settleOk: r.independent.settle?.ok ?? false } : null,
     reverted,
     clawed,
     revertReason,
