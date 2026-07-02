@@ -3,6 +3,7 @@
 // Archived mode WITHOUT having been pre-recorded into public/replays. Returns
 // the same slimmed record shape the /match page expects, plus team meta.
 import { iso } from "@/lib/iso";
+import { lookupArchived } from "@/lib/archive-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,6 +45,12 @@ export async function GET(_request: Request, ctx: { params: Promise<{ fid: strin
         if (f) { p1 = f.Participant1; p2 = f.Participant2; }
       }
     } catch {}
+    // Aged-out matches are gone from the snapshot, so recover the names from the
+    // durable archive instead of falling back to "Home"/"Away".
+    if (p1 === "Home" && p2 === "Away") {
+      const a = await lookupArchived(fid);
+      if (a) { p1 = a.p1; p2 = a.p2; }
+    }
     const minutes = recs.reduce((m, r) => Math.max(m, r.Clock?.Seconds ?? 0), 0) / 60;
     const entry = { fid, p1, p2, iso1: iso(p1), iso2: iso(p2), minutes: Math.round(minutes) };
     return Response.json({ entry, recs });

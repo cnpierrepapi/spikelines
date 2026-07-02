@@ -3,7 +3,8 @@
 // runtime. The fixtures snapshot has no live flag, so "live" = kickoff window
 // (started within the last ~2.5h).
 import { iso } from "@/lib/iso";
-import { finishedFids } from "@/lib/live-state";
+import { matchStates } from "@/lib/live-state";
+import { persistArchived, type ArchivedRow } from "@/lib/archive-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,9 +30,22 @@ export async function GET() {
     const candidates = arr.filter((f) => f.CompetitionId === 72 && f.StartTime <= now && now <= f.StartTime + LIVE_WINDOW_MS);
 
     // Drop matches whose scores feed has finalised — they belong in Archived now.
-    const finished = await finishedFids(base, jwt, apiToken, candidates.map((f) => f.FixtureId));
+    const states = await matchStates(base, jwt, apiToken, candidates.map((f) => f.FixtureId));
+
+    // A match usually finishes WHILE still inside the 2.5h live window, so this is
+    // the earliest moment we can catch full time. Persist those to the durable
+    // archive right here so Archived is populated even if nobody hits /api/archived
+    // before the match rolls off the fixtures snapshot.
+    const finishedRows: ArchivedRow[] = candidates
+      .filter((f) => states.get(f.FixtureId)?.finished)
+      .map((f) => {
+        const s = states.get(f.FixtureId)!;
+        return { fid: f.FixtureId, p1: f.Participant1, p2: f.Participant2, iso1: iso(f.Participant1), iso2: iso(f.Participant2), goals: s.g1 + s.g2, minutes: s.minutes };
+      });
+    await persistArchived(finishedRows);
+
     const matches = candidates
-      .filter((f) => !finished.has(f.FixtureId))
+      .filter((f) => !states.get(f.FixtureId)?.finished)
       .map((f) => ({
         fid: f.FixtureId,
         p1: f.Participant1,

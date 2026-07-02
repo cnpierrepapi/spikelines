@@ -95,7 +95,9 @@ export default function Lobby() {
                 {live === null && <div className="text-muted text-sm">checking…</div>}
                 {live !== null && liveOnly.length === 0 && <div className="card-surface rounded-2xl p-4 text-muted text-sm sm:col-span-2">No live matches right now — play an archived one.</div>}
                 {liveOnly.map((m) => (
-                  <MatchRow key={m.fid} href={`/live/${m.fid}`} m={m} live played={played.includes(m.fid)} />
+                  // Live matches are always re-enterable — the one-shot lock only
+                  // applies to archived replays, so never grey a live row.
+                  <MatchRow key={m.fid} href={`/live/${m.fid}`} m={m} live />
                 ))}
               </div>
             </section>
@@ -110,7 +112,9 @@ export default function Lobby() {
                 {fixtures.length === 0 && <div className="text-muted text-sm">checking…</div>}
                 {fixtures.length > 0 && upcoming.length === 0 && <div className="card-surface rounded-2xl p-4 text-muted text-sm sm:col-span-2">No upcoming matches in the next few days.</div>}
                 {upcoming.map((m) => (
-                  <MatchRow key={m.fid} href={`/live/${m.fid}`} m={m} sub={`kicks off ${kickoff(m.startTime)}`} played={played.includes(m.fid)} />
+                  // Upcoming matches haven't been played yet by definition — and
+                  // they open into the live room, which is re-enterable.
+                  <MatchRow key={m.fid} href={`/live/${m.fid}`} m={m} sub={`kicks off ${kickoff(m.startTime)}`} />
                 ))}
               </div>
             </section>
