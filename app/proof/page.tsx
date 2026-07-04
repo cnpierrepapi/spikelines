@@ -30,14 +30,28 @@ type Bet = {
   recheckable?: boolean; // proof not final + not terminal → worth an auto re-check
 };
 type Fixture = { fixture_id: number; match: string };
-type Independent = { ok: boolean; detail?: string; baseOk?: boolean; settleOk?: boolean };
-type Result = { txSig?: string | null; status?: string; detail?: string; delta?: number | null; reverted?: boolean; clawed?: number; revertReason?: string | null; independent?: Independent | null };
+// Gate 3 — our own deployed program's on-chain record of the corrected match result.
+type TruthRecord = {
+  recordPda: string;
+  commitTx: string | null;
+  truth: { p1: number; p2: number };
+  anchored: { p1: number; p2: number };
+  diverges: boolean;
+  varApplied: boolean;
+  slot: number;
+};
+type Independent = { ok: boolean; absent?: boolean; detail?: string; baseOk?: boolean; settleOk?: boolean };
+type Result = { txSig?: string | null; status?: string; detail?: string; delta?: number | null; reverted?: boolean; clawed?: number; revertReason?: string | null; independent?: Independent | null; cluster?: string };
 
 const MARKET_ICON: Record<Bet["market"], string> = { goal: "⚽", corner: "🚩", yellow: "🟨", red: "🟥" };
 // Proofs land on Solana MAINNET (the production oracle where real WC roots
 // reconcile), so explorer links target mainnet-beta (the default cluster).
 const explorerAddr = (a: string) => `https://explorer.solana.com/address/${a}`;
 const explorerTx = (s: string) => `https://explorer.solana.com/tx/${s}`;
+// Gate 3's program lives on devnet, so its receipts need the cluster query param.
+const clusterQ = (cluster: string) => (cluster === "mainnet-beta" || cluster === "mainnet" ? "" : `?cluster=${cluster}`);
+const explorerAddrOn = (a: string, cluster: string) => `${explorerAddr(a)}${clusterQ(cluster)}`;
+const explorerTxOn = (s: string, cluster: string) => `${explorerTx(s)}${clusterQ(cluster)}`;
 
 function teamOf(match: string, side: 1 | 2): string {
   const parts = match.split("–");
@@ -64,6 +78,8 @@ export default function ProofPage() {
   const [outcome, setOutcome] = useState("");
   const [busy, setBusy] = useState<number | null>(null);
   const [results, setResults] = useState<Record<number, Result>>({});
+  const [oracle, setOracle] = useState<Record<number, TruthRecord | null>>({});
+  const [oracleCluster, setOracleCluster] = useState("devnet");
   const [watching, setWatching] = useState(false);
   const betsRef = useRef<Bet[]>([]);
   const sweepingRef = useRef(false);
@@ -92,6 +108,27 @@ export default function ProofPage() {
   useEffect(() => {
     betsRef.current = bets;
   }, [bets]);
+
+  // GATE 3 — read our own program's on-chain corrected-result record for every
+  // fixture on the board (batched, deduped). Read-only devnet lookup; nothing is
+  // signed or deployed. Fixtures we haven't fetched yet get looked up once.
+  useEffect(() => {
+    const need = [...new Set(bets.map((b) => b.fixture_id))].filter((fid) => !(fid in oracle));
+    if (!need.length) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const j = await fetch(`/api/proof/oracle?fids=${need.join(",")}`).then((r) => r.json());
+        if (cancelled || !j.ok) return;
+        if (j.cluster) setOracleCluster(j.cluster);
+        setOracle((prev) => ({ ...prev, ...(j.records ?? {}) }));
+      } catch {
+        // best-effort: leave Gate 3 unshown for these fixtures
+        if (!cancelled) setOracle((prev) => ({ ...prev, ...Object.fromEntries(need.map((f) => [f, null])) }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [bets, oracle]);
 
   // AUTOMATIC availability watcher. A bet settles greyed because TxLINE hasn't
   // posted its on-chain root yet; the root shows up minutes later. Rather than make
@@ -157,7 +194,7 @@ export default function ProofPage() {
     try {
       const j = await fetch("/api/proof/anchor", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) }).then((r) => r.json());
       if (j.ok) {
-        setResults((r) => ({ ...r, [id]: { txSig: j.settleSig, status: "verified", delta: j.delta, reverted: j.reverted, clawed: j.clawed, revertReason: j.revertReason, independent: j.independent ?? null } }));
+        setResults((r) => ({ ...r, [id]: { txSig: j.settleSig, status: "verified", delta: j.delta, reverted: j.reverted, clawed: j.clawed, revertReason: j.revertReason, independent: j.independent ?? null, cluster: j.cluster } }));
         setBets((bs) => bs.map((b) => (b.id === id
           ? { ...b, proof_status: "verified", proof_tx: j.settleSig ?? b.proof_tx, reverted: !!j.reverted, revert_reason: j.revertReason ?? b.revert_reason, ...(j.clawed > 0 ? { outcome: "lost" as const, reward: 0 } : {}) }
           : b)));
@@ -205,13 +242,16 @@ export default function ProofPage() {
           <span className="text-foreground font-semibold">Verify</span> to re-check any call yourself.
         </p>
         <p className="text-xs text-muted leading-relaxed mb-1">
-          Two independent gates back every result.{" "}
+          Three checks, not one.{" "}
           <span className="text-foreground font-semibold">Gate&nbsp;1</span> — we rebuild TxLINE&apos;s Merkle
-          proof ourselves in the browser/server (<span className="font-mono">sha256</span>, no Anchor program,
-          no wallet) and confirm the stat value matches their published sub-tree root; it catches a tampered
-          value that <span className="font-mono text-primary">validate_stat</span> alone would take on trust.{" "}
+          proof ourselves (<span className="font-mono">sha256</span>, no Anchor program, no wallet) and confirm the
+          stat value matches their published sub-tree root; it catches a tampered value that{" "}
+          <span className="font-mono text-primary">validate_stat</span> alone would take on trust.{" "}
           <span className="text-foreground font-semibold">Gate&nbsp;2</span> — <span className="font-mono text-primary">validate_stat</span>{" "}
-          anchors that sub-tree to the on-chain daily root. You see both verdicts per call.
+          anchors that sub-tree to TxLINE&apos;s on-chain daily root (their mainnet program).{" "}
+          <span className="text-foreground font-semibold">Gate&nbsp;3</span> — <span className="text-foreground">our own
+          deployed Solana program</span> holds an immutable, timestamped record of the VAR-aware corrected match
+          result, linked back to TxLINE&apos;s root. Every gate links to its own explorer receipt — trust none of us.
         </p>
         <p className="text-xs text-muted mb-5">
           {loading ? "loading…" : `${bets.length} calls shown · ${anchoredCount} anchored on-chain`}
@@ -245,6 +285,14 @@ export default function ProofPage() {
             const anchored = !!txSig;
             const canAnchor = b.proof_status === "verified" && !anchored;
             const working = busy === b.id;
+            // Gate 2 lands on mainnet in prod; the route tells us which cluster it used.
+            const gate2Cluster = res?.cluster || "mainnet-beta";
+            // Gate 3 = our own program's on-chain corrected-result record (devnet).
+            const o = oracle[b.fixture_id];
+            const oLoaded = b.fixture_id in oracle;
+            // Show the full 3-gate panel once the row has any on-chain artifact or the
+            // user has tapped Verify (res set) — so one tap surfaces all three gates.
+            const showGates = !!(res || b.proof_tx || b.proof_root || b.reverted || o);
             return (
               <div key={b.id} className="card-surface rounded-xl p-3.5">
                 <div className="flex items-center justify-between gap-3">
@@ -266,7 +314,7 @@ export default function ProofPage() {
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge status={b.proof_status} anchored={anchored} />
                     {anchored ? (
-                      <a href={explorerTx(txSig!)} target="_blank" rel="noreferrer" className="text-xs font-bold rounded-lg border border-success/40 text-success px-2.5 py-1 hover:bg-success/10">
+                      <a href={explorerTxOn(txSig!, gate2Cluster)} target="_blank" rel="noreferrer" className="text-xs font-bold rounded-lg border border-success/40 text-success px-2.5 py-1 hover:bg-success/10">
                         tx ↗
                       </a>
                     ) : canAnchor ? (
@@ -290,33 +338,80 @@ export default function ProofPage() {
                     )}
                   </div>
                 </div>
-                {(res || b.proof_root || b.proof_tx || b.reverted) && (
-                  <div className="mt-2 pt-2 border-t border-white/5 text-[11px] space-y-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className={`truncate ${b.reverted ? "text-destructive" : "text-muted"}`}>
-                        {res?.revertReason || (b.reverted ? b.revert_reason : null) ||
-                          (anchored ? "anchored on-chain ✓" : res?.detail || (b.proof_status === "verified" ? "reconciles — anchoring on-chain…" : "not anchored on-chain"))}
-                        {res?.delta != null && <span className="text-foreground"> · Δ{res.delta}</span>}
+                {showGates && (
+                  <div className="mt-2 pt-2 border-t border-white/5 space-y-1.5">
+                    {/* dispute / claw-back note */}
+                    {(res?.revertReason || (b.reverted && b.revert_reason)) && (
+                      <div className="text-[11px] text-destructive truncate">⚑ {res?.revertReason || b.revert_reason}</div>
+                    )}
+
+                    {/* GATE 1 — our own sha256 recompute, offline, no program. A 0-value
+                        leg is an absence proof (not recomputable) → attested, not ✗. */}
+                    <div className="flex items-center justify-between gap-2 text-[10px] font-mono">
+                      <span className="truncate">
+                        <span className={`font-bold ${!res?.independent ? "text-muted" : res.independent.ok ? "text-success" : "text-destructive"}`}>
+                          {!res?.independent ? "•" : res.independent.ok ? "✓" : "✗"} Gate&nbsp;1
+                        </span>
+                        <span className="text-foreground"> independent recompute</span>
+                        <span className="text-muted"> · our own sha256 Merkle, no program</span>
+                      </span>
+                      <span className="text-muted shrink-0">
+                        {!res?.independent ? "tap Verify" : res.independent.ok ? (res.independent.absent ? "0-value leg attested ✓" : "reproduced ✓") : "mismatch"}
+                      </span>
+                    </div>
+
+                    {/* GATE 2 — TxLINE validate_stat, landed on mainnet */}
+                    <div className="flex items-center justify-between gap-2 text-[10px] font-mono">
+                      <span className="truncate">
+                        <span className={`font-bold ${anchored ? "text-success" : "text-muted"}`}>{anchored ? "✓" : "•"} Gate&nbsp;2</span>
+                        <span className="font-mono text-primary"> validate_stat</span>
+                        <span className="text-muted"> · TxLINE mainnet oracle{res?.delta != null ? ` · Δ${res.delta}` : ""}</span>
                       </span>
                       {anchored ? (
-                        <a href={explorerTx(txSig!)} target="_blank" rel="noreferrer" className="text-success font-mono shrink-0 hover:underline">
-                          {txSig!.slice(0, 4)}…{txSig!.slice(-4)} ↗
+                        <a href={explorerTxOn(txSig!, gate2Cluster)} target="_blank" rel="noreferrer" className="text-success shrink-0 hover:underline">
+                          ⛓ tx {txSig!.slice(0, 4)}…{txSig!.slice(-4)} ↗
                         </a>
+                      ) : b.proof_status === "verified" ? (
+                        <span className="text-primary shrink-0">reconciles ▶ tap Verify</span>
                       ) : b.proof_root ? (
-                        <a href={explorerAddr(b.proof_root)} target="_blank" rel="noreferrer" className="text-muted font-mono shrink-0 hover:underline">
+                        <a href={explorerAddrOn(b.proof_root, gate2Cluster)} target="_blank" rel="noreferrer" className="text-muted shrink-0 hover:underline">
                           root {b.proof_root.slice(0, 4)}…{b.proof_root.slice(-4)} ↗
                         </a>
-                      ) : null}
+                      ) : (
+                        <span className="text-muted shrink-0">root not posted yet</span>
+                      )}
                     </div>
-                    {res?.independent && (
-                      <div className="flex items-center gap-1.5 text-[10px] font-mono">
-                        <span className={res.independent.ok ? "text-success" : "text-destructive"}>
-                          {res.independent.ok ? "🔎 Gate 1 independent recompute ✓" : "🔎 Gate 1 recompute ✗"}
-                        </span>
-                        <span className="text-muted/50">·</span>
-                        <span className="text-muted">our own sha256 Merkle, no program — Gate 2 anchors it on-chain</span>
-                      </div>
-                    )}
+
+                    {/* GATE 3 — OUR own deployed program's corrected-result record, on devnet */}
+                    <div className="flex items-center justify-between gap-2 text-[10px] font-mono">
+                      {o ? (
+                        <>
+                          <span className="truncate">
+                            <span className={`font-bold ${o.diverges ? "text-destructive" : "text-success"}`}>{o.diverges ? "⚠" : "✓"} Gate&nbsp;3</span>
+                            <span className="text-foreground"> our program</span>
+                            <span className="text-muted"> · {o.diverges ? `caught VAR discrepancy (${o.truth.p1}–${o.truth.p2} vs anchored ${o.anchored.p1}–${o.anchored.p2})` : `corrected result ${o.truth.p1}–${o.truth.p2}`} · devnet</span>
+                          </span>
+                          <a
+                            href={o.commitTx ? explorerTxOn(o.commitTx, oracleCluster) : explorerAddrOn(o.recordPda, oracleCluster)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={`shrink-0 hover:underline ${o.diverges ? "text-destructive" : "text-success"}`}
+                            title="Our own deployed Solana program's immutable record of the corrected result"
+                          >
+                            ⛓ {o.commitTx ? `tx ${o.commitTx.slice(0, 4)}…${o.commitTx.slice(-4)}` : `rec ${o.recordPda.slice(0, 4)}…${o.recordPda.slice(-4)}`} ↗
+                          </a>
+                        </>
+                      ) : (
+                        <>
+                          <span className="truncate">
+                            <span className="font-bold text-muted">• Gate&nbsp;3</span>
+                            <span className="text-foreground"> our program</span>
+                            <span className="text-muted"> · {oLoaded ? "no record committed for this fixture" : "checking devnet…"} · devnet</span>
+                          </span>
+                          <span className="text-muted shrink-0">—</span>
+                        </>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

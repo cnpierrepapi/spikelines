@@ -12,7 +12,16 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60; // landing 2 txns + confirmations
 
-const txUrl = (sig: string) => `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
+// Gate 2 lands on whatever cluster SOLANA_RPC_URL points at — mainnet in production
+// (that's where TxLINE anchors real World Cup roots), devnet only for local testing.
+// Report it so the UI links the receipt to the right explorer cluster.
+const GATE2_CLUSTER = /devnet/.test(process.env.SOLANA_RPC_URL || "")
+  ? "devnet"
+  : /testnet/.test(process.env.SOLANA_RPC_URL || "")
+    ? "testnet"
+    : "mainnet-beta";
+const txUrl = (sig: string) =>
+  `https://explorer.solana.com/tx/${sig}${GATE2_CLUSTER === "mainnet-beta" ? "" : `?cluster=${GATE2_CLUSTER}`}`;
 
 export async function POST(request: Request) {
   if (!supaReady()) return Response.json({ ok: false, error: "not configured" }, { status: 503 });
@@ -42,7 +51,7 @@ export async function POST(request: Request) {
 
   // Idempotent: don't re-land (and re-spend) if already anchored.
   if (bet.proof_tx) {
-    return Response.json({ ok: true, status: "verified", alreadyAnchored: true, settleSig: bet.proof_tx, txUrl: txUrl(bet.proof_tx) });
+    return Response.json({ ok: true, status: "verified", alreadyAnchored: true, settleSig: bet.proof_tx, txUrl: txUrl(bet.proof_tx), cluster: GATE2_CLUSTER });
   }
 
   const r = await anchorBet({ fid: bet.fixture_id, statKey: bet.stat_key, baseTs: bet.base_ts, settleTs: bet.settle_ts });
@@ -90,12 +99,13 @@ export async function POST(request: Request) {
     ok: true,
     status: "verified",
     root: r.root,
+    cluster: GATE2_CLUSTER,
     baseSig: r.baseSig,
     settleSig: r.settleSig,
     txUrl: txUrl(r.settleSig),
     delta: r.delta,
     recomputedYes: r.recomputedYes,
-    independent: r.independent ? { ok: r.independent.ok, detail: r.independent.base?.detail ?? "", baseOk: r.independent.base?.ok ?? false, settleOk: r.independent.settle?.ok ?? false } : null,
+    independent: r.independent ? { ok: r.independent.ok, absent: r.independent.absent ?? false, detail: r.independent.base?.detail ?? "", baseOk: r.independent.base?.ok ?? false, settleOk: r.independent.settle?.ok ?? false } : null,
     reverted,
     clawed,
     revertReason,

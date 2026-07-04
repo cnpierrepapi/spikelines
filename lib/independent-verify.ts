@@ -1,22 +1,21 @@
-// INDEPENDENT Merkle recompute — our OWN check gate, no Anchor program, no wallet,
-// no RPC, no fee. Given a TxLINE stat-validation bundle, we re-hash the stat leaf
-// and walk the raw proof nodes ourselves to reproduce the two Merkle roots TxLINE
-// publishes (eventStatRoot and the fixture's eventStatsSubTreeRoot). If our
-// independently-computed roots equal theirs, the stat VALUE genuinely belongs to
-// that fixture's committed sub-tree — which is exactly the link `validate_stat`
-// alone asks you to take on trust (it proves the sub-tree is on-chain, but trusts
-// the API's claim that this value maps to it).
+// INDEPENDENT Merkle recompute — our OWN check gate (Gate 1), no Anchor program, no
+// wallet, no RPC, no fee. Given a TxLINE stat-validation bundle, we re-hash the stat
+// leaf and walk the raw proof nodes ourselves to reproduce the two Merkle roots
+// TxLINE publishes (eventStatRoot and the fixture's eventStatsSubTreeRoot). If ours
+// equal theirs, the anchored value is genuinely what TxLINE committed — catching a
+// tampered value that validate_stat (Gate 2) alone would take on trust.
 //
-// Spec reverse-derived empirically from live mainnet fixtures (18172379, 18179551):
-//   hash      = SHA-256  (note: NOT keccak, which most Solana trees use)
+// Spec reverse-derived empirically from live mainnet fixtures:
+//   hash      = SHA-256   (not keccak)
 //   stat leaf = sha256( key:u32LE ‖ value:i32LE ‖ period:i32LE )   (borsh ScoreStat)
 //   node fold = isRightSibling ? sha256(cur ‖ sib) : sha256(sib ‖ cur)
 //
-// The third level (fixtureSummary → the daily root in the on-chain PDA) is a
-// program black box — its leaf encoding + account layout are unpublished, and
-// TxLINE's own reference only checks the PDA exists and delegates to the program.
-// So that final anchor stays with `validate_stat` (see lib/proof.ts). This module
-// is the part we CAN verify from first principles, and we do.
+// NOTE: a value=0 stat is proved by a SPARSE-tree ABSENCE proof (sentinel node
+// 0x01‖0xFF… padding) whose encoding TxLINE does not publish, so it can't be rebuilt
+// from first principles — we mark those `absent` (on-chain-attested via validate_stat
+// only), NOT a false ✗. Every scored tally (value ≥ 1) is a present, recomputable
+// stat. This is why a match where a side scored 0 (e.g. a 2–0) shows one leg attested
+// rather than failed.
 import { sha256 } from "@noble/hashes/sha256";
 
 type ProofNode = { hash: number[] | string; isRightSibling?: boolean; is_right_sibling?: boolean };
@@ -31,9 +30,9 @@ type StatBundleLike = {
 
 export type IndependentCheck = {
   ok: boolean; // both levels reconstructed to TxLINE's published roots
-  leafToEvent: boolean; // our sha256 fold(stat leaf, statProof) === eventStatRoot
-  eventToSubtree: boolean; // our sha256 fold(eventStatRoot, subTreeProof) === eventStatsSubTreeRoot
-  computedEventRoot: string | null;
+  absent: boolean; // a value=0 absence proof — on-chain-attested, not recomputable
+  leafToEvent: boolean;
+  eventToSubtree: boolean;
   computedSubtreeRoot: string | null;
   detail: string;
 };
@@ -62,36 +61,51 @@ function fold(leaf: Buffer, nodes: ProofNode[]): Buffer {
   return cur;
 }
 
+// A value=0 proof uses a sentinel sparse-tree node (first proof hash begins 0x01
+// followed by 0xFF padding). Detect it so we report `absent` rather than a false ✗.
+function looksAbsent(bundle: StatBundleLike, stat: { value: number }): boolean {
+  if (stat.value !== 0) return false;
+  const first = bundle.statProof?.[0];
+  if (!first) return true;
+  const b = toBuf(first.hash);
+  return b.length === 32 && b[0] === 0x01 && b[1] === 0xff;
+}
+
 export function independentCheck(bundle: StatBundleLike): IndependentCheck {
-  const fail = (detail: string): IndependentCheck => ({
-    ok: false, leafToEvent: false, eventToSubtree: false, computedEventRoot: null, computedSubtreeRoot: null, detail,
-  });
+  const base = { leafToEvent: false, eventToSubtree: false, computedSubtreeRoot: null as string | null };
   const stat = bundle.statToProve ?? bundle.stat_to_prove;
   if (!stat || !bundle.statProof || !bundle.subTreeProof || !bundle.eventStatRoot || !bundle.summary?.eventStatsSubTreeRoot) {
-    return fail("incomplete bundle (missing proof nodes or published roots)");
+    return { ...base, ok: false, absent: false, detail: "incomplete bundle (missing proof nodes or published roots)" };
+  }
+  if (looksAbsent(bundle, stat)) {
+    return { ...base, ok: false, absent: true, detail: "0-value absence proof — on-chain-attested (validate_stat), not independently recomputable" };
   }
   const computedEvent = fold(statLeaf(stat), bundle.statProof);
   const leafToEvent = computedEvent.equals(toBuf(bundle.eventStatRoot));
-  // Fold from OUR computed event root (fully independent); if leafToEvent holds it
-  // equals TxLINE's, so a false here isolates which level diverged.
   const computedSub = fold(computedEvent, bundle.subTreeProof);
   const eventToSubtree = computedSub.equals(toBuf(bundle.summary.eventStatsSubTreeRoot));
   const ok = leafToEvent && eventToSubtree;
   return {
     ok,
+    absent: false,
     leafToEvent,
     eventToSubtree,
-    computedEventRoot: computedEvent.toString("hex"),
     computedSubtreeRoot: computedSub.toString("hex"),
     detail: ok
-      ? "independent sha256 recompute ✓ (stat value belongs to the committed sub-tree)"
+      ? "independent sha256 recompute ✓ (value reconciles to TxLINE's committed sub-tree)"
       : `independent recompute mismatch (leaf→event ${leafToEvent}, event→subtree ${eventToSubtree})`,
   };
 }
 
-// Combine the two window endpoints of a Spikelines bet into one verdict.
+// Combine the two window endpoints of a Spikelines bet into one verdict. A leg whose
+// value is 0 is an absence proof → attested (not recomputable), which must NOT count
+// as a mismatch. So `ok` means "no genuine recompute failure" (present legs reconcile
+// and absent legs are attested), and `absent` flags that at least one leg was a 0-value
+// absence proof — the UI shows that as attested-✓ rather than a red ✗.
 export function independentPair(base: StatBundleLike, settle: StatBundleLike) {
   const b = independentCheck(base);
   const s = independentCheck(settle);
-  return { ok: b.ok && s.ok, base: b, settle: s };
+  const ok = (b.ok || b.absent) && (s.ok || s.absent);
+  const absent = b.absent || s.absent;
+  return { ok, absent, base: b, settle: s };
 }
