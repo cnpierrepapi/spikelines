@@ -129,7 +129,7 @@ export default function Lobby() {
               <div className="grid sm:grid-cols-2 gap-3">
                 {archived === null && <div className="text-muted text-sm">loading…</div>}
                 {allArchived.map((m) => (
-                  <MatchRow key={m.fid} href={`/match/${m.fid}`} m={m} thriller={m.goals >= 4} sub={`${m.minutes}' · World Cup`} played={played.includes(m.fid)} />
+                  <MatchRow key={m.fid} href={`/match/${m.fid}`} m={m} thriller={m.goals >= 4} sub={`${m.minutes}'`} played={played.includes(m.fid)} />
                 ))}
               </div>
             </section>
