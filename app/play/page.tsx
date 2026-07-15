@@ -259,13 +259,13 @@ function MatchRow({ href, m, live, thriller, sub, played }: { href: string; m: {
   // One-shot-per-match: a played match is no longer clickable.
   if (played) {
     return (
-      <div className="card-surface rounded-2xl p-4 flex items-center justify-between opacity-50 cursor-not-allowed" title="You've already played this match">
+      <div className="card-surface rounded-2xl p-4 flex items-center justify-between min-w-0 opacity-50 cursor-not-allowed" title="You've already played this match">
         {body}
       </div>
     );
   }
   return (
-    <Link href={href} className={`card-surface rounded-2xl p-4 flex items-center justify-between transition ${live ? "border-destructive/30 hover:border-destructive/60" : "hover:border-primary/40"}`}>
+    <Link href={href} className={`card-surface rounded-2xl p-4 flex items-center justify-between min-w-0 transition ${live ? "border-destructive/30 hover:border-destructive/60" : "hover:border-primary/40"}`}>
       {body}
     </Link>
   );
