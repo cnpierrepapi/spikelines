@@ -12,14 +12,19 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/ec2-user/spikelines-bot
-ExecStart=/usr/bin/env npx tsx src/index.ts
+# Runs from inside the repo checkout so the bot can import ../lib (match-feed, markets).
+WorkingDirectory=/home/ec2-user/spikelines/bot
+# Node lives under nvm on the box, so use absolute paths + an explicit PATH
+# (systemd services get a minimal PATH that won't include the nvm bin dir).
+# Adjust the nvm version path if node is upgraded.
+Environment=PATH=/home/ec2-user/.nvm/versions/node/v22.23.1/bin:/usr/local/bin:/usr/bin:/bin
+Environment=NODE_ENV=production
+EnvironmentFile=/home/ec2-user/spikelines/bot/.env
+ExecStart=/home/ec2-user/.nvm/versions/node/v22.23.1/bin/node /home/ec2-user/.nvm/versions/node/v22.23.1/bin/npx tsx src/index.ts
 Restart=always
 RestartSec=5
 MemoryMax=256M
 CPUQuota=40%
-Environment=NODE_ENV=production
-EnvironmentFile=/home/ec2-user/spikelines-bot/.env
 
 [Install]
 WantedBy=multi-user.target
