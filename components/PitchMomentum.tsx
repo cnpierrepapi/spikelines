@@ -20,20 +20,21 @@ const TEAM2 = "#ff7a7a"; // defends right goal, attacks left
 
 // Formation for the team defending the LEFT goal (x,y in 0..1 of the pitch). fwd =
 // how far up the player commits when their team attacks (GK ~0, forwards ~1).
+// Spread wide across the pitch so nobody bunches at rest.
 const FORMATION: { x: number; y: number; fwd: number }[] = [
-  { x: 0.05, y: 0.5, fwd: 0.0 },   // keeper
-  { x: 0.2, y: 0.24, fwd: 0.35 },  // back four
-  { x: 0.16, y: 0.5, fwd: 0.25 },
-  { x: 0.2, y: 0.76, fwd: 0.35 },
-  { x: 0.36, y: 0.34, fwd: 0.7 },  // midfield
-  { x: 0.36, y: 0.66, fwd: 0.7 },
-  { x: 0.34, y: 0.5, fwd: 0.6 },
-  { x: 0.5, y: 0.4, fwd: 1.0 },    // forwards
-  { x: 0.5, y: 0.6, fwd: 1.0 },
-  { x: 0.46, y: 0.5, fwd: 0.9 },
+  { x: 0.045, y: 0.5, fwd: 0.0 },  // keeper
+  { x: 0.17, y: 0.16, fwd: 0.3 },  // back four (wide)
+  { x: 0.14, y: 0.4, fwd: 0.25 },
+  { x: 0.14, y: 0.6, fwd: 0.25 },
+  { x: 0.17, y: 0.84, fwd: 0.3 },
+  { x: 0.33, y: 0.26, fwd: 0.6 },  // midfield three
+  { x: 0.31, y: 0.5, fwd: 0.55 },
+  { x: 0.33, y: 0.74, fwd: 0.6 },
+  { x: 0.48, y: 0.34, fwd: 1.0 },  // two forwards
+  { x: 0.48, y: 0.66, fwd: 1.0 },
 ];
 
-type Dot = { x: number; y: number; vx: number; vy: number; team: 1 | 2; base: { x: number; y: number; fwd: number }; ph: number };
+type Dot = { x: number; y: number; vx: number; vy: number; team: 1 | 2; base: { x: number; y: number; fwd: number }; ph: number; ringA: number; ringR: number };
 
 export default function PitchMomentum({
   tier, attacker, label, color, hot, progress,
@@ -71,9 +72,15 @@ export default function PitchMomentum({
     ro.observe(canvas);
 
     // Build both teams from the formation (team2 is mirrored across the halfway line).
+    // Each dot gets a stable ring slot (angle + radius) so that when the team swarms
+    // the ball they SPREAD AROUND it instead of stacking on the same point.
     const dots: Dot[] = [];
-    for (const b of FORMATION) dots.push({ x: b.x, y: b.y, vx: 0, vy: 0, team: 1, base: b, ph: Math.random() * 6.28 });
-    for (const b of FORMATION) dots.push({ x: 1 - b.x, y: b.y, vx: 0, vy: 0, team: 2, base: { x: 1 - b.x, y: b.y, fwd: b.fwd }, ph: Math.random() * 6.28 });
+    const n = FORMATION.length;
+    FORMATION.forEach((b, i) => {
+      const ringR = 0.09 + (1 - b.fwd) * 0.09 + (i % 3) * 0.012; // forwards tighter, others wider
+      dots.push({ x: b.x, y: b.y, vx: 0, vy: 0, team: 1, base: b, ph: Math.random() * 6.28, ringA: (i / n) * Math.PI * 2, ringR });
+      dots.push({ x: 1 - b.x, y: b.y, vx: 0, vy: 0, team: 2, base: { x: 1 - b.x, y: b.y, fwd: b.fwd }, ph: Math.random() * 6.28, ringA: (i / n) * Math.PI * 2 + Math.PI, ringR });
+    });
 
     const ball = { x: 0.5, y: 0.5, vx: 0, vy: 0 };
     let kickCd = 0;
@@ -87,34 +94,54 @@ export default function PitchMomentum({
       t += dt;
       const { tier: tr, attacker: atk, color: col, hot: isHot } = state.current;
       const reach = REACH[tr] ?? 0.08;
+      const intensity = reach / REACH.high_danger; // 0..1
       const attackingRight = atk === 1; // team1 attacks the right goal
       const goalX = attackingRight ? 0.98 : 0.02; // the goal being attacked
+      const active = tr !== "safe";
+
+      // One "presser" per team: the closest dot to the ball challenges it directly;
+      // everyone else keeps their spacing. This is what stops the pile-up.
+      let press1: Dot | null = null, press2: Dot | null = null, d1 = 9, d2 = 9;
+      for (const d of dots) {
+        const dd = Math.hypot(ball.x - d.x, ball.y - d.y);
+        if (d.team === 1) { if (dd < d1) { d1 = dd; press1 = d; } }
+        else { if (dd < d2) { d2 = dd; press2 = d; } }
+      }
+      const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 
       // ── player targets ──────────────────────────────────────────
       for (const d of dots) {
         const teamAttacking = (d.team === 1) === attackingRight;
         const dir = d.team === 1 ? 1 : -1; // team1 pushes right
-        // Attacking team commits upfield (scaled by player role + intensity);
-        // defending team holds a compact block, sagging slightly toward its own goal.
-        const shift = teamAttacking ? dir * reach * (0.4 + d.base.fwd) : -dir * reach * 0.18 * (0.4 + d.base.fwd);
-        const tx = Math.max(0.03, Math.min(0.97, d.base.x + shift));
-        // idle wander so nobody stands frozen
+        // formation shifted by intensity: attackers commit upfield, defenders hold.
+        const shift = teamAttacking ? dir * reach * (0.4 + d.base.fwd) : -dir * reach * 0.16 * (0.4 + d.base.fwd);
+        let tx = d.base.x + shift;
         const wy = Math.sin(t * 0.04 + d.ph) * 0.012;
-        const ty = Math.max(0.08, Math.min(0.92, d.base.y + wy));
+        let ty = d.base.y + wy;
 
-        // spring toward target
-        d.vx += (tx - d.x) * 0.012 * dt;
-        d.vy += (ty - d.y) * 0.012 * dt;
-
-        // the nearest attacker chases the ball
-        if (teamAttacking) {
-          const bdx = ball.x - d.x, bdy = ball.y - d.y;
-          const bd = Math.hypot(bdx, bdy);
-          if (bd < 0.28 && d.base.fwd > 0.5) {
-            d.vx += (bdx / (bd + 1e-4)) * 0.02 * dt;
-            d.vy += (bdy / (bd + 1e-4)) * 0.02 * dt;
+        const isPresser = d === press1 || d === press2;
+        if (active) {
+          if (isPresser) {
+            // challenge the ball directly (this one can kick it)
+            tx = ball.x; ty = ball.y;
+          } else if (teamAttacking && d.base.fwd > 0.4) {
+            // support: take a slot on a ring AROUND the ball, spread by role.
+            const rx = ball.x + Math.cos(d.ringA) * d.ringR;
+            const ry = ball.y + Math.sin(d.ringA) * d.ringR;
+            tx = lerp(tx, rx, 0.55 * intensity + 0.2);
+            ty = lerp(ty, ry, 0.55 * intensity + 0.2);
+          } else if (!teamAttacking && d.base.fwd < 0.85) {
+            // defenders shift laterally to cover the ball's lane, staying goal-side + spread.
+            ty = lerp(ty, ball.y + (d.ringR - 0.13) * 2, 0.4 * intensity);
           }
         }
+        tx = Math.max(0.03, Math.min(0.97, tx));
+        ty = Math.max(0.07, Math.min(0.93, ty));
+
+        // spring toward target (a touch snappier for the presser so it reaches the ball)
+        const k = isPresser ? 0.02 : 0.013;
+        d.vx += (tx - d.x) * k * dt;
+        d.vy += (ty - d.y) * k * dt;
         d.vx *= 0.86; d.vy *= 0.86;
         d.x += d.vx * dt; d.y += d.vy * dt;
       }
