@@ -1,52 +1,28 @@
-// Durable archive of finished matches (spk_archived). Server-only: uses the
-// service-role Supabase client. This is what makes Archived survive TxLINE's
-// rolling fixtures snapshot — once a match is seen finished it's persisted here
-// and listed forever, even after it ages out of the live feed.
-import { supaReady, supaUpsert, supaGet } from "@/lib/supa";
+// Durable archive of finished matches. Previously backed by a Supabase table
+// (spk_archived); that table was dropped in the July database consolidation, which
+// silently emptied the Archived list. The durable set now lives in-repo as a static
+// list (lib/archived-matches.ts) — no database dependency, and it can't be lost to a
+// rolling live-feed window. This module keeps the original API so /api/live,
+// /api/archived and /api/replay don't have to change.
+import { ARCHIVED_MATCHES, ARCHIVED_BY_FID, type ArchivedRow } from "@/lib/archived-matches";
 
-export type ArchivedRow = { fid: number; p1: string; p2: string; iso1: string; iso2: string; goals: number; minutes: number };
+export type { ArchivedRow };
 
-// Upsert finished matches by fixture id. Idempotent (safe to call on every
-// live/archived request); refreshes goals/minutes if a later pass has newer data.
-// Never throws — archiving is best-effort and must not break the lobby.
-export async function persistArchived(rows: ArchivedRow[]): Promise<void> {
-  if (!supaReady() || rows.length === 0) return;
-  try {
-    const now = new Date().toISOString();
-    await supaUpsert(
-      "spk_archived",
-      rows.map((r) => ({ fixture_id: r.fid, p1: r.p1, p2: r.p2, iso1: r.iso1, iso2: r.iso2, goals: r.goals, minutes: r.minutes, updated_at: now })),
-      { onConflict: "fixture_id", returning: false }
-    );
-  } catch {
-    // swallow — a Supabase blip shouldn't take down /api/live or /api/archived
-  }
+// No-op: archiving is now a build-time concern (the static list), not a runtime write.
+// Kept so the live/archived routes can still call it on every finished match without
+// caring where the durable copy lives. To make a newly-finished match permanent, add
+// it to lib/archived-matches.ts.
+export async function persistArchived(_rows: ArchivedRow[]): Promise<void> {
+  return;
 }
 
-// All persisted archived matches, newest-finished first.
+// The full durable archive, newest-finished first (already ordered in the static list).
 export async function loadArchived(limit = 100): Promise<ArchivedRow[]> {
-  if (!supaReady()) return [];
-  try {
-    const rows = await supaGet<Array<{ fixture_id: number; p1: string; p2: string; iso1: string; iso2: string; goals: number; minutes: number }>>(
-      `spk_archived?select=fixture_id,p1,p2,iso1,iso2,goals,minutes&order=finished_at.desc&limit=${limit}`
-    );
-    return rows.map((r) => ({ fid: r.fixture_id, p1: r.p1, p2: r.p2, iso1: r.iso1, iso2: r.iso2, goals: r.goals, minutes: r.minutes }));
-  } catch {
-    return [];
-  }
+  return ARCHIVED_MATCHES.slice(0, limit);
 }
 
-// One persisted match by fixture id — used by /api/replay to recover team names
-// once a match has aged out of the fixtures snapshot.
+// One archived match by fixture id — used by /api/replay to recover team names once a
+// match has aged out of the fixtures snapshot (otherwise replay falls back to Home/Away).
 export async function lookupArchived(fid: number): Promise<ArchivedRow | null> {
-  if (!supaReady()) return null;
-  try {
-    const rows = await supaGet<Array<{ fixture_id: number; p1: string; p2: string; iso1: string; iso2: string; goals: number; minutes: number }>>(
-      `spk_archived?select=fixture_id,p1,p2,iso1,iso2,goals,minutes&fixture_id=eq.${fid}&limit=1`
-    );
-    const r = rows[0];
-    return r ? { fid: r.fixture_id, p1: r.p1, p2: r.p2, iso1: r.iso1, iso2: r.iso2, goals: r.goals, minutes: r.minutes } : null;
-  } catch {
-    return null;
-  }
+  return ARCHIVED_BY_FID.get(fid) ?? null;
 }
