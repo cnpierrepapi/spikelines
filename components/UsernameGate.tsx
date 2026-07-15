@@ -1,65 +1,51 @@
 "use client";
 
-// First-visit username prompt on /play. Picks a name, claims it server-side
-// (case-insensitive unique), and seeds the player's leaderboard row. Until a
-// name is chosen the rest of the lobby is dimmed behind it.
-import { useEffect, useState } from "react";
+// First-visit identity. Instead of prompting, we auto-assign a random football-
+// flavoured handle, claim it server-side (case-insensitive unique) and seed the
+// player's leaderboard row — all silently. The component renders nothing; the
+// lobby is never gated behind a modal. Kept as a component with the same contract
+// as the old prompt (default export + optional onReady) so /play doesn't change.
+import { useEffect, useRef } from "react";
 import { getUsername, setUsername } from "@/lib/store";
 import { claimUsername } from "@/lib/remote";
 
-const VALID = /^[a-zA-Z0-9_-]{3,20}$/;
+const ADJ = ["Clinical", "Offside", "Silky", "Rapid", "Iron", "Golden", "Counter", "Total", "Deep", "High", "Late", "Long", "Near", "Wired", "Set", "Lofted"];
+const NOUN = ["Poacher", "Libero", "Sweeper", "Winger", "Target", "Playmaker", "Striker", "Anchor", "Maestro", "Sniper", "Engine", "Pivot", "Outlet", "Finisher", "Keeper", "Wall"];
+
+// e.g. "ClinicalPoacher47" — always matches the /^[a-zA-Z0-9_-]{3,20}$/ handle rule.
+function randomName(): string {
+  const pick = <T,>(a: T[]) => a[Math.floor(Math.random() * a.length)];
+  return `${pick(ADJ)}${pick(NOUN)}${10 + Math.floor(Math.random() * 90)}`;
+}
 
 export default function UsernameGate({ onReady }: { onReady?: (name: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [err, setErr] = useState("");
-  const [busy, setBusy] = useState(false);
+  const done = useRef(false);
 
   useEffect(() => {
+    if (done.current) return;
+    done.current = true;
+
     const existing = getUsername();
-    if (existing) onReady?.(existing);
-    else setOpen(true);
+    if (existing) { onReady?.(existing); return; }
+
+    // Assign locally first so the app works immediately even if the backend is
+    // down, then best-effort claim it (retrying once if that handle is taken).
+    (async () => {
+      let name = randomName();
+      setUsername(name);
+      onReady?.(name);
+      try {
+        let res = await claimUsername(name);
+        if (res.error === "username_taken") {
+          name = randomName();
+          res = await claimUsername(name);
+          if (res.ok || res.error === "backend not configured") setUsername(name);
+        }
+      } catch {
+        // ignore — the local name already stands in
+      }
+    })();
   }, [onReady]);
 
-  if (!open) return null;
-
-  const submit = async () => {
-    const n = name.trim();
-    if (!VALID.test(n)) { setErr("3–20 letters, numbers, _ or - only."); return; }
-    setBusy(true); setErr("");
-    const res = await claimUsername(n);
-    setBusy(false);
-    if (res.ok) { setUsername(n); setOpen(false); onReady?.(n); }
-    else if (res.error === "username_taken") setErr("That name's taken — try another.");
-    else if (res.error === "backend not configured") { setUsername(n); setOpen(false); onReady?.(n); } // offline-friendly
-    else setErr("Couldn't save that name. Try again.");
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 backdrop-blur-sm px-6">
-      <div className="card-surface gold-glow rounded-2xl p-7 max-w-sm w-full text-center animate-pop">
-        <div className="text-4xl mb-3">👁️</div>
-        <h2 className="text-2xl font-black mb-1">Pick your name</h2>
-        <p className="text-muted text-sm mb-5">This is how you&apos;ll show up on the leaderboard. Choose well.</p>
-        <input
-          value={name}
-          autoFocus
-          onChange={(e) => { setName(e.target.value); setErr(""); }}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          placeholder="e.g. xG_wizard"
-          spellCheck={false}
-          maxLength={20}
-          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-center font-bold focus:border-primary/50 focus:outline-none mb-3"
-        />
-        {err && <p className="text-destructive text-xs mb-3">{err}</p>}
-        <button
-          onClick={submit}
-          disabled={busy || !name.trim()}
-          className="w-full py-3 rounded-xl bg-primary text-background font-black gold-glow active:scale-95 transition disabled:opacity-50"
-        >
-          {busy ? "Claiming…" : "Start playing →"}
-        </button>
-      </div>
-    </div>
-  );
+  return null;
 }
