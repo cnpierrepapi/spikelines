@@ -78,7 +78,7 @@ export type TgCall = {
   id: number; chat_id: number; message_id: number | null; fixture_id: number;
   match: string; market: string; side: 1 | 2; team: string; mins: number;
   open_sec: number; deadline_sec: number; base_ts: number | null; settle_ts: number | null;
-  closes_at: string; status: string; result: string | null;
+  closes_at: string; status: string; result: string | null; mode: string;
 };
 
 export async function activeGroups(): Promise<{ chat_id: number }[]> {

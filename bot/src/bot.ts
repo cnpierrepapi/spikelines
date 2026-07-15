@@ -3,6 +3,7 @@ import { bot } from "./instance.ts";
 import { env } from "./env.ts";
 import { ensureUser, getUser, upsertChat, setChatActive, setChatQuiet, groupTop, userRank, setUserNotify } from "./db.ts";
 import { handleAnswer } from "./calls.ts";
+import { startArchivedSession } from "./replay.ts";
 
 const isGroup = (t: string) => t === "group" || t === "supergroup";
 
@@ -30,7 +31,7 @@ bot.command("start", async (ctx) => {
     await ctx.reply(
       "Spikelines is live in this group. ⚡\n\n" +
         "When a World Cup match is on, I'll drop quick calls right here. Will they score, win a corner, or pick up a card? Tap YES or NO, build a streak, top the group board.\n\n" +
-        "/top for the group leaderboard. /quiet to pause calls (admins).",
+        "No match on right now? Use /play to replay a past one together. /top for the board, /quiet to pause (admins).",
       { reply_markup: kb }
     );
     return;
@@ -48,11 +49,29 @@ bot.command("start", async (ctx) => {
   );
 });
 
+// Archived play in a group: start a shared replay of a recorded match that everyone
+// calls together. DM users play archived matches in the Mini App instead.
+bot.command("play", async (ctx) => {
+  const chat = ctx.chat;
+  if (!chat) return;
+  if (!isGroup(chat.type)) {
+    await ctx.reply(
+      "In a group, /play starts a shared replay of a past match that everyone calls together. For solo archived play, open the app.",
+      { reply_markup: new InlineKeyboard().webApp("▶ Open Spikelines", env.MINIAPP_URL) }
+    );
+    return;
+  }
+  await upsertChat(chat.id, chat.type, (chat as any).title ?? null);
+  const msg = await startArchivedSession(chat.id);
+  await ctx.reply(msg);
+});
+
 bot.command("help", async (ctx) => {
   const dm = !isGroup(ctx.chat?.type ?? "");
   await ctx.reply(
     "Spikelines ⚡ — call what happens next in a live match.\n\n" +
       "/start — open the game" + (dm ? " (launches the app)" : "") + "\n" +
+      (dm ? "" : "/play — replay a past match together (any time)\n") +
       "/me — your SPIKES, streak and record\n" +
       "/top — leaderboard" + (dm ? "" : " for this group") + "\n" +
       "/link — connect a Solana wallet\n" +
