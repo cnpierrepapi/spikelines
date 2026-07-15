@@ -448,7 +448,7 @@ export default function LiveMatch() {
               </div>
             )}
 
-            <PitchMomentum tier={tier} attacker={attacker} iso1={entry?.iso1} iso2={entry?.iso2} label={ti.label} color={ti.color} hot={hot} />
+            <PitchMomentum tier={tier} attacker={attacker} iso1={entry?.iso1} iso2={entry?.iso2} label={ti.label} color={ti.color} hot={hot} score={score} />
             {!seen && <div className="text-muted text-xs -mt-2 text-center">waiting for the match to come alive…</div>}
 
             <div className="flex items-center justify-between px-1">

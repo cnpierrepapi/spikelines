@@ -37,7 +37,7 @@ const FORMATION: { x: number; y: number; fwd: number }[] = [
 type Dot = { x: number; y: number; vx: number; vy: number; team: 1 | 2; base: { x: number; y: number; fwd: number }; ph: number; ringA: number; ringR: number };
 
 export default function PitchMomentum({
-  tier, attacker, label, color, hot, progress,
+  tier, attacker, label, color, hot, progress, score = { p1: 0, p2: 0 },
 }: {
   tier: Tier;
   attacker: 1 | 2;
@@ -47,11 +47,12 @@ export default function PitchMomentum({
   color: string;
   hot: boolean;
   progress?: number;
+  score?: { p1: number; p2: number }; // real scoreboard — the ball only enters a net on a goal
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // Live inputs read by the loop without restarting it.
-  const state = useRef({ tier, attacker, color, hot });
-  state.current = { tier, attacker, color, hot };
+  const state = useRef({ tier, attacker, color, hot, score });
+  state.current = { tier, attacker, color, hot, score };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -87,6 +88,10 @@ export default function PitchMomentum({
     let last = performance.now();
     let raf = 0;
     let t = 0;
+    // Goal state: the ball is kept in front of the goals and only crosses the line
+    // into the net when the REAL scoreboard increments. goalSide 0 = normal play.
+    let lastP1 = 0, lastP2 = 0, warm = 0;
+    let goalSide: 0 | 1 | 2 = 0, holdT = 0;
 
     const loop = (now: number) => {
       const dt = Math.min((now - last) / 16.67, 2.2); // frames, capped
@@ -146,32 +151,60 @@ export default function PitchMomentum({
         d.x += d.vx * dt; d.y += d.vy * dt;
       }
 
-      // ── ball physics: chased, kicked toward the attacked goal ────
-      kickCd -= dt;
-      for (const d of dots) {
-        const dx = ball.x - d.x, dy = ball.y - d.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist < 0.035 && kickCd <= 0) {
-          const kicking = (d.team === 1) === attackingRight;
-          const tgx = kicking ? goalX : (d.team === 1 ? 0.02 : 0.98);
-          const ang = Math.atan2(0.5 + (Math.random() - 0.5) * 0.5 - ball.y, tgx - ball.x);
-          const power = 0.012 + reach * 0.02 + Math.random() * 0.006;
-          ball.vx = Math.cos(ang) * power;
-          ball.vy = Math.sin(ang) * power;
-          kickCd = 12 + Math.random() * 10;
+      // ── goal detection: a real scoreboard increment sends the ball into the net ──
+      const sc = state.current.score;
+      if (warm < 45) { warm += dt; lastP1 = sc.p1; lastP2 = sc.p2; } // ignore mount/hydration
+      else {
+        if (goalSide === 0) {
+          if (sc.p1 > lastP1) { goalSide = 1; holdT = 0; }      // team1 scored → right net
+          else if (sc.p2 > lastP2) { goalSide = 2; holdT = 0; } // team2 scored → left net
         }
+        lastP1 = sc.p1; lastP2 = sc.p2;
       }
-      // drift toward the pressured third even without a kick (team pressure)
-      ball.vx += ((goalX - ball.x) * 0.0006 * (0.4 + reach)) * dt;
-      ball.vx *= 0.97; ball.vy *= 0.97;
-      ball.x += ball.vx * dt; ball.y += ball.vy * dt;
-      // walls: bounce off touchlines, clear off the goal lines back into play
-      if (ball.y < 0.06) { ball.y = 0.06; ball.vy = Math.abs(ball.vy) * 0.6; }
-      if (ball.y > 0.94) { ball.y = 0.94; ball.vy = -Math.abs(ball.vy) * 0.6; }
-      if (ball.x < 0.04) { ball.x = 0.06; ball.vx = Math.abs(ball.vx) * 0.5 + 0.004; }
-      if (ball.x > 0.96) { ball.x = 0.94; ball.vx = -Math.abs(ball.vx) * 0.5 - 0.004; }
 
-      draw(ctx, W, H, dots, ball, col, isHot);
+      // ── ball physics ─────────────────────────────────────────────
+      if (goalSide !== 0) {
+        // GOAL: drive the ball across the line into the net, hold, then kick off.
+        const netX = goalSide === 1 ? 0.985 : 0.015;
+        const inNet = goalSide === 1 ? ball.x > 0.95 : ball.x < 0.05;
+        if (!inNet && holdT === 0) {
+          ball.vx += (netX - ball.x) * 0.03 * dt;
+          ball.vy += (0.5 - ball.y) * 0.02 * dt;
+        } else {
+          holdT += dt; // resting in the net
+          ball.vx *= 0.6; ball.vy *= 0.6;
+        }
+        ball.vx *= 0.92; ball.vy *= 0.92;
+        ball.x += ball.vx * dt; ball.y += ball.vy * dt;
+        if (holdT > 55) { ball.x = 0.5; ball.y = 0.5; ball.vx = 0; ball.vy = 0; goalSide = 0; holdT = 0; }
+      } else {
+        // NORMAL PLAY: chased + kicked toward the attacked goal, but kept OUT of the
+        // goal area — the ball can't cross the line without a real goal.
+        kickCd -= dt;
+        for (const d of dots) {
+          const dist = Math.hypot(ball.x - d.x, ball.y - d.y);
+          if (dist < 0.035 && kickCd <= 0) {
+            const kicking = (d.team === 1) === attackingRight;
+            const tgx = kicking ? goalX : (d.team === 1 ? 0.02 : 0.98);
+            const ang = Math.atan2(0.5 + (Math.random() - 0.5) * 0.5 - ball.y, tgx - ball.x);
+            const power = 0.012 + reach * 0.02 + Math.random() * 0.006;
+            ball.vx = Math.cos(ang) * power;
+            ball.vy = Math.sin(ang) * power;
+            kickCd = 12 + Math.random() * 10;
+          }
+        }
+        ball.vx += ((goalX - ball.x) * 0.0006 * (0.4 + reach)) * dt; // team pressure
+        ball.vx *= 0.97; ball.vy *= 0.97;
+        ball.x += ball.vx * dt; ball.y += ball.vy * dt;
+        // touchlines bounce; the goal lines are a hard wall in front of the net
+        // (x 0.09 / 0.91) so the ball stays out of the goal until a goal is scored.
+        if (ball.y < 0.06) { ball.y = 0.06; ball.vy = Math.abs(ball.vy) * 0.6; }
+        if (ball.y > 0.94) { ball.y = 0.94; ball.vy = -Math.abs(ball.vy) * 0.6; }
+        if (ball.x < 0.09) { ball.x = 0.1; ball.vx = Math.abs(ball.vx) * 0.5 + 0.004; }
+        if (ball.x > 0.91) { ball.x = 0.9; ball.vx = -Math.abs(ball.vx) * 0.5 - 0.004; }
+      }
+
+      draw(ctx, W, H, dots, ball, col, isHot, goalSide);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -196,7 +229,7 @@ export default function PitchMomentum({
 }
 
 // ── rendering (all in canvas pixel space) ─────────────────────────
-function draw(ctx: CanvasRenderingContext2D, W: number, H: number, dots: Dot[], ball: { x: number; y: number }, color: string, hot: boolean) {
+function draw(ctx: CanvasRenderingContext2D, W: number, H: number, dots: Dot[], ball: { x: number; y: number }, color: string, hot: boolean, goalSide: 0 | 1 | 2) {
   ctx.clearRect(0, 0, W, H);
 
   // turf with mowing stripes
@@ -216,6 +249,24 @@ function draw(ctx: CanvasRenderingContext2D, W: number, H: number, dots: Dot[], 
   const boxW = W * 0.13, boxH = H * 0.46;
   ctx.strokeRect(pad, (H - boxH) / 2, boxW, boxH);
   ctx.strokeRect(W - pad - boxW, (H - boxH) / 2, boxW, boxH);
+
+  // goals: a netted frame at each end. my0..my1 is the goal mouth; gd the net depth.
+  const my0 = H * 0.4, my1 = H * 0.6, gd = W * 0.03;
+  const goal = (x0: number, lit: boolean) => {
+    // net fill + mesh
+    ctx.fillStyle = lit ? "rgba(120,240,170,0.22)" : "rgba(255,255,255,0.06)";
+    ctx.fillRect(x0, my0, gd, my1 - my0);
+    ctx.strokeStyle = "rgba(255,255,255,0.22)";
+    ctx.lineWidth = 1;
+    for (let i = 1; i < 4; i++) { const lx = x0 + (gd * i) / 4; ctx.beginPath(); ctx.moveTo(lx, my0); ctx.lineTo(lx, my1); ctx.stroke(); }
+    for (let i = 1; i < 3; i++) { const ly = my0 + ((my1 - my0) * i) / 3; ctx.beginPath(); ctx.moveTo(x0, ly); ctx.lineTo(x0 + gd, ly); ctx.stroke(); }
+    // white frame (posts + crossbar/back)
+    ctx.strokeStyle = lit ? "rgba(150,255,190,0.95)" : "rgba(255,255,255,0.9)";
+    ctx.lineWidth = Math.max(1.5, W * 0.006);
+    ctx.strokeRect(x0, my0, gd, my1 - my0);
+  };
+  goal(1, goalSide === 2);          // left goal (team1 defends) — lit when team2 scores
+  goal(W - 1 - gd, goalSide === 1); // right goal (team2 defends) — lit when team1 scores
 
   const rDot = Math.max(3.5, H * 0.032);
   for (const d of dots) {

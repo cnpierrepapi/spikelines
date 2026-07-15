@@ -474,7 +474,7 @@ export default function ReplayMatch() {
           </div>
         )}
 
-        <PitchMomentum tier={tier} attacker={attacker} iso1={entry?.iso1} iso2={entry?.iso2} label={ti.label} color={ti.color} hot={hot} progress={progress} />
+        <PitchMomentum tier={tier} attacker={attacker} iso1={entry?.iso1} iso2={entry?.iso2} label={ti.label} color={ti.color} hot={hot} progress={progress} score={score} />
 
         <div className="flex items-center justify-between px-1">
           <div className="flex items-center gap-2">
