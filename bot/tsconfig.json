@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+  // ../lib/markets.ts + ../lib/match-feed.ts are imported at runtime via tsx (which
+  // doesn't type-check them) and are already type-checked by the Next app under its
+  // own libs; keeping them out of here avoids node-vs-dom RequestInit friction.
+}

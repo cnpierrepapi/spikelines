@@ -1,0 +1,25 @@
+# systemd unit for the Spikelines Telegram bot on the box.
+# Install: sudo cp spikelines-bot.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#          sudo systemctl enable --now spikelines-bot
+#
+# Hard resource caps so the bot can NEVER starve the lagisalpha crons sharing this
+# box, and auto-restart so a crash mid-match self-heals (all call state is in the
+# DB, so a restart resumes cleanly).
+[Unit]
+Description=Spikelines Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ec2-user/spikelines-bot
+ExecStart=/usr/bin/env npx tsx src/index.ts
+Restart=always
+RestartSec=5
+MemoryMax=256M
+CPUQuota=40%
+Environment=NODE_ENV=production
+EnvironmentFile=/home/ec2-user/spikelines-bot/.env
+
+[Install]
+WantedBy=multi-user.target
