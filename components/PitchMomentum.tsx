@@ -37,7 +37,7 @@ const FORMATION: { x: number; y: number; fwd: number }[] = [
 type Dot = { x: number; y: number; vx: number; vy: number; team: 1 | 2; base: { x: number; y: number; fwd: number }; ph: number; ringA: number; ringR: number };
 
 export default function PitchMomentum({
-  tier, attacker, label, color, hot, progress, score = { p1: 0, p2: 0 }, corner,
+  tier, attacker, label, color, hot, progress, score = { p1: 0, p2: 0 }, corner, paused = false,
 }: {
   tier: Tier;
   attacker: 1 | 2;
@@ -49,11 +49,12 @@ export default function PitchMomentum({
   progress?: number;
   score?: { p1: number; p2: number }; // real scoreboard — the ball only enters a net on a goal
   corner?: { side: 1 | 2; token: number } | null; // a real TxLINE corner — token changes each time
+  paused?: boolean; // clock not running (half-time / break / pre-kickoff / full time) → freeze the play
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // Live inputs read by the loop without restarting it.
-  const state = useRef({ tier, attacker, color, hot, score, corner });
-  state.current = { tier, attacker, color, hot, score, corner };
+  const state = useRef({ tier, attacker, color, hot, score, corner, paused });
+  state.current = { tier, attacker, color, hot, score, corner, paused };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -100,8 +101,20 @@ export default function PitchMomentum({
     const loop = (now: number) => {
       const dt = Math.min((now - last) / 16.67, 2.2); // frames, capped
       last = now;
-      t += dt;
       const { tier: tr, attacker: atk, color: col, hot: isHot } = state.current;
+
+      // ── half-time / break freeze ────────────────────────────────
+      // When the match clock isn't running (the TxLINE feed reports Running:false at
+      // half-time, stoppages, before kickoff and at full time), the play stops: hold
+      // every player + the ball exactly where they are and just keep repainting the
+      // frame. Motion resumes the instant the clock runs again. This is stream-
+      // agnostic — it keys off the feed's clock, not anything World-Cup-specific.
+      if (state.current.paused) {
+        draw(ctx, W, H, dots, ball, col, isHot, goalSide, cornerSide !== 0 ? { x: cornerSide === 1 ? 0.955 : 0.045, y: cornerY } : null);
+        raf = requestAnimationFrame(loop);
+        return;
+      }
+      t += dt;
       const reach = REACH[tr] ?? 0.08;
       const intensity = reach / REACH.high_danger; // 0..1
       const attackingRight = atk === 1; // team1 attacks the right goal
