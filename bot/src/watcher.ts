@@ -1,6 +1,7 @@
 import { createMatchFeedState, pollMatchOnce, MATCH_POLL_MS, type MatchEvent } from "../../lib/match-feed.ts";
 import { getLiveMatches, txlineBase, txlineToken, txlineJwt, type LiveMatch } from "./txline.ts";
 import { openCall, settleFixtureStat, sweepElapsed, settleAllNo } from "./calls.ts";
+import { announceKickoff } from "./notify.ts";
 import { DISCOVERY_MS } from "./config.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -37,6 +38,7 @@ async function runFixture(m: LiveMatch): Promise<void> {
   };
 
   console.log(`watch ${m.fid} ${m.p1}-${m.p2}`);
+  announceKickoff(m).catch((e) => console.error("kickoff", e)); // DM opted-in players once
   while (active.get(m.fid)) {
     try {
       const base = txlineBase(), token = txlineToken(), jwt = await txlineJwt();

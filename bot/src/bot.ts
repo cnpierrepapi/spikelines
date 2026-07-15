@@ -1,7 +1,7 @@
 import { InlineKeyboard, GrammyError } from "grammy";
 import { bot } from "./instance.ts";
 import { env } from "./env.ts";
-import { ensureUser, getUser, upsertChat, setChatActive, setChatQuiet, groupTop } from "./db.ts";
+import { ensureUser, getUser, upsertChat, setChatActive, setChatQuiet, groupTop, userRank, setUserNotify } from "./db.ts";
 import { handleAnswer } from "./calls.ts";
 
 const isGroup = (t: string) => t === "group" || t === "supergroup";
@@ -53,10 +53,10 @@ bot.command("help", async (ctx) => {
   await ctx.reply(
     "Spikelines ⚡ — call what happens next in a live match.\n\n" +
       "/start — open the game" + (dm ? " (launches the app)" : "") + "\n" +
-      "/balance — your SPIKES\n" +
+      "/me — your SPIKES, streak and record\n" +
       "/top — leaderboard" + (dm ? "" : " for this group") + "\n" +
       "/link — connect a Solana wallet\n" +
-      (dm ? "" : "/quiet — pause calls in this group (admins)\n") +
+      (dm ? "/mute — turn kickoff alerts off (/unmute on)\n" : "/quiet — pause calls in this group (admins)\n") +
       "\nSPIKE packs and USDC withdrawals live in the app, tap Open Spikelines.",
     isGroup(ctx.chat?.type ?? "")
       ? { reply_markup: new InlineKeyboard().url("Open Spikelines", env.MINIAPP_URL) }
@@ -95,14 +95,49 @@ bot.command("top", async (ctx) => {
     await ctx.reply("No calls in this group yet. Play a few during the next live match and the board fills up.");
     return;
   }
+  const medal = (i: number) => (i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}.`);
   const lines = await Promise.all(
     rows.map(async (r, i) => {
       const u = await getUser(r.tg_id);
       const name = u?.handle ?? String(r.tg_id);
-      return `${i + 1}. ${name} — ${r.correct}/${r.total} · 🔥${r.streak}`;
+      return `${medal(i)} ${name} — ${r.correct}/${r.total} · 🔥${r.streak}`;
     })
   );
-  await ctx.reply("Group board\n\n" + lines.join("\n"));
+  // If the caller isn't in the shown top, tell them where they stand.
+  let footer = "";
+  if (ctx.from && !rows.some((r) => r.tg_id === ctx.from!.id)) {
+    const me = await userRank(chat.id, ctx.from.id);
+    if (me) footer = `\n\nYou: #${me.rank} — ${me.correct}/${me.total}`;
+  }
+  await ctx.reply("Group board\n\n" + lines.join("\n") + footer);
+});
+
+bot.command("me", async (ctx) => {
+  const from = ctx.from;
+  if (!from) return;
+  const u = (await getUser(from.id)) ?? (await ensureUser(from.id, { username: from.username, firstName: from.first_name }));
+  const acc = u.calls ? Math.round((u.correct / u.calls) * 100) : 0;
+  await ctx.reply(
+    `${u.handle}\n` +
+      `SPIKES: ${u.spikes.toLocaleString()}\n` +
+      `Streak: 🔥${u.streak} (best ${u.best_streak})\n` +
+      `Calls: ${u.correct}/${u.calls} correct (${acc}%)` +
+      (isGroup(ctx.chat?.type ?? "") ? "" : `\n\nWallet: ${u.wallet ? "linked" : "not linked, /link"}`)
+  );
+});
+
+bot.command("mute", async (ctx) => {
+  const from = ctx.from;
+  if (!from) return;
+  await setUserNotify(from.id, false);
+  await ctx.reply("Kickoff alerts off. /unmute to turn them back on.");
+});
+bot.command("unmute", async (ctx) => {
+  const from = ctx.from;
+  if (!from) return;
+  await ensureUser(from.id, { username: from.username, firstName: from.first_name });
+  await setUserNotify(from.id, true);
+  await ctx.reply("Kickoff alerts on. ⚡ I'll ping you when a match goes live.");
 });
 
 bot.command("quiet", async (ctx) => {

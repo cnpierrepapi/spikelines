@@ -153,6 +153,34 @@ export async function applyUserResult(tgId: number, won: boolean, reward: number
   await supa.from("tg_users").update(upd).eq("tg_id", tgId);
   return { ...u, ...upd } as TgUser;
 }
+// ── notifications + ranking ─────────────────────────────────────────
+export async function notifiableUsers(): Promise<{ tg_id: number; handle: string; streak: number }[]> {
+  const { data, error } = await supa.from("tg_users").select("tg_id, handle, streak").eq("notify", true);
+  if (error) throw error;
+  return (data as any[]) ?? [];
+}
+export async function setUserNotify(tgId: number, on: boolean): Promise<void> {
+  await supa.from("tg_users").update({ notify: on, updated_at: new Date().toISOString() }).eq("tg_id", tgId);
+}
+// Announce a match once: returns true only the first time (insert wins), false if
+// it's already been announced (duplicate PK) — so restarts don't re-notify.
+export async function claimMatchNotif(fixtureId: number): Promise<boolean> {
+  const { error } = await supa.from("tg_match_notifs").insert({ fixture_id: fixtureId });
+  if (error) {
+    if ((error as any).code === "23505") return false;
+    throw error;
+  }
+  return true;
+}
+// The caller's 1-based rank in a group (by correct calls), or null if they haven't played.
+export async function userRank(chatId: number, tgId: number): Promise<{ rank: number; correct: number; total: number } | null> {
+  const { data } = await supa.from("tg_group_scores").select("tg_id, correct, total").eq("chat_id", chatId).order("correct", { ascending: false });
+  const rows = (data as any[]) ?? [];
+  const i = rows.findIndex((r) => r.tg_id === tgId);
+  if (i < 0) return null;
+  return { rank: i + 1, correct: rows[i].correct, total: rows[i].total };
+}
+
 export async function applyGroupResult(chatId: number, tgId: number, won: boolean): Promise<void> {
   const { data } = await supa.from("tg_group_scores").select("*").eq("chat_id", chatId).eq("tg_id", tgId).maybeSingle();
   const cur = (data as any) ?? { correct: 0, total: 0, streak: 0, best_streak: 0 };

@@ -15,9 +15,10 @@ async function main() {
   // Only the commands we actually handle, shown in the Telegram command menu.
   await bot.api.setMyCommands([
     { command: "start", description: "Open the game" },
-    { command: "balance", description: "Your SPIKES" },
+    { command: "me", description: "Your stats" },
     { command: "top", description: "Group leaderboard" },
     { command: "link", description: "Connect a Solana wallet" },
+    { command: "mute", description: "Mute kickoff alerts" },
     { command: "help", description: "How it works" },
   ]);
 
