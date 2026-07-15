@@ -7,6 +7,7 @@ import { recordBet, addBalance, markPlayed, getBalance, streakSaveCost, buyStrea
 import { celebrateFrom } from "@/lib/celebrate";
 import { settleBet } from "@/lib/remote";
 import { MatchStatsPanel } from "@/components/match-stats";
+import PitchMomentum from "@/components/PitchMomentum";
 import { type MarketKind, type Side, type Trigger, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
 type Tier = "safe" | "attack" | "danger" | "high_danger";
@@ -398,7 +399,6 @@ export default function LiveMatch() {
   }, [fid, settle, teamName, addEvent, bumpStat, finalize, applyClock, firePrompt]);
 
   const ti = TIER[tier];
-  const pos = 50 + (attacker === 2 ? ti.reach : -ti.reach);
   const hot = tier === "high_danger";
   // The feed pauses the clock at the break (Running:false). Surface it so a paused
   // match doesn't look broken — markets only fire while the ball is in play.
@@ -448,16 +448,8 @@ export default function LiveMatch() {
               </div>
             )}
 
-            <div className={`card-surface rounded-2xl p-5 ${hot ? "danger-glow" : ""}`}>
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-xs uppercase tracking-widest text-muted">Momentum</span>
-                <span className="text-xs font-bold uppercase tracking-wider" style={{ color: ti.color }}>{hot && "⚠ "}{ti.label}</span>
-              </div>
-              <div className="relative h-3 rounded-full" style={{ background: "linear-gradient(90deg,#1b4f8c33,#0a1628 50%,#1b4f8c33)" }}>
-                <div className={`absolute top-1/2 w-5 h-5 rounded-full transition-all duration-500 ${hot ? "orb-pulse" : ""}`} style={{ left: `${pos}%`, transform: "translate(-50%,-50%)", background: ti.color, boxShadow: `0 0 20px ${ti.color}` }} />
-              </div>
-              {!seen && <div className="text-muted text-xs mt-3 text-center">waiting for the match to come alive…</div>}
-            </div>
+            <PitchMomentum tier={tier} attacker={attacker} iso1={entry?.iso1} iso2={entry?.iso2} label={ti.label} color={ti.color} hot={hot} />
+            {!seen && <div className="text-muted text-xs -mt-2 text-center">waiting for the match to come alive…</div>}
 
             <div className="flex items-center justify-between px-1">
               <div className="flex items-center gap-2">

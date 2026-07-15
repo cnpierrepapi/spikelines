@@ -1,7 +1,7 @@
 // Client → server glue for the Supabase-backed features (leaderboard, username,
 // profile sync). Best-effort: if the backend isn't configured the app still runs
 // fully on local state.
-import { getDeviceId, getUsername, getBalance, getWallet, leaderboardScore } from "./store";
+import { getDeviceId, getUsername, getBalance, getWallet, leaderboardScore, queueSettle, getSettleQueue, dequeueSettle } from "./store";
 
 type SyncBody = { device_id: string; username: string; score: number; spikes: number; wallet: string };
 function localState(usernameOverride?: string): SyncBody {
@@ -78,17 +78,37 @@ export type SettleBet = {
   base_ts?: number;
   settle_ts?: number;
 };
+// POST a settle payload. Returns true only if the server persisted it (2xx).
+async function postSettle(body: unknown): Promise<boolean> {
+  try {
+    const r = await fetch("/api/bets/settle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      keepalive: true, // survive a page navigation right after a final-whistle settle
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+// Re-send any settles that failed on a previous attempt (e.g. the backend was
+// down). Best-effort; a still-failing item stays queued for the next flush.
+export async function flushSettleQueue(): Promise<void> {
+  for (const item of getSettleQueue()) {
+    if (await postSettle(item.body)) dequeueSettle(item.id);
+  }
+}
+
 export function settleBet(b: SettleBet): void {
   const device_id = getDeviceId();
   if (!device_id) return;
-  try {
-    void fetch("/api/bets/settle", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...b, device_id, username: getUsername() }),
-      keepalive: true, // survive a page navigation right after a final-whistle settle
-    });
-  } catch {}
+  const body = { ...b, device_id, username: getUsername() };
+  void (async () => {
+    await flushSettleQueue(); // opportunistically drain the backlog first
+    if (!(await postSettle(body))) queueSettle(String(b.client_bet_id), body);
+  })();
 }
 
 export async function requestWithdraw(): Promise<{ ok: boolean; queued?: number; error?: string }> {

@@ -7,6 +7,7 @@ import { recordBet, addBalance, hasPlayed, markPlayed, getBalance, streakSaveCos
 import { celebrateFrom } from "@/lib/celebrate";
 import { settleBet } from "@/lib/remote";
 import { MatchStatsPanel } from "@/components/match-stats";
+import PitchMomentum from "@/components/PitchMomentum";
 import { type MarketKind, type Side, type Trigger, sideOf, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
 type Tier = "safe" | "attack" | "danger" | "high_danger";
@@ -392,7 +393,6 @@ export default function ReplayMatch() {
   }, [loaded, blocked, process, finalize]);
 
   const ti = TIER[tier];
-  const pos = 50 + (attacker === 2 ? ti.reach : -ti.reach);
   const hot = tier === "high_danger";
   const progress = recs.current.length ? Math.min(100, Math.round((ptr.current / recs.current.length) * 100)) : 0;
 
@@ -474,20 +474,7 @@ export default function ReplayMatch() {
           </div>
         )}
 
-        <div className={`card-surface rounded-2xl p-5 ${hot ? "danger-glow" : ""}`}>
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs uppercase tracking-widest text-muted">Momentum</span>
-            <span className="text-xs font-bold uppercase tracking-wider" style={{ color: ti.color }}>
-              {hot && "⚠ "}{ti.label}
-            </span>
-          </div>
-          <div className="relative h-3 rounded-full" style={{ background: "linear-gradient(90deg,#1b4f8c33,#0a1628 50%,#1b4f8c33)" }}>
-            <div className={`absolute top-1/2 w-5 h-5 rounded-full transition-all duration-500 ${hot ? "orb-pulse" : ""}`} style={{ left: `${pos}%`, transform: "translate(-50%,-50%)", background: ti.color, boxShadow: `0 0 20px ${ti.color}` }} />
-          </div>
-          <div className="mt-3 h-1 rounded-full bg-white/5 overflow-hidden">
-            <div className="h-full bg-primary/40" style={{ width: `${progress}%` }} />
-          </div>
-        </div>
+        <PitchMomentum tier={tier} attacker={attacker} iso1={entry?.iso1} iso2={entry?.iso2} label={ti.label} color={ti.color} hot={hot} progress={progress} />
 
         <div className="flex items-center justify-between px-1">
           <div className="flex items-center gap-2">

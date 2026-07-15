@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { getBalance, getBets, getPlayed, type StoredBet } from "@/lib/store";
 import UsernameGate from "@/components/UsernameGate";
-import { syncProfile } from "@/lib/remote";
+import { syncProfile, flushSettleQueue } from "@/lib/remote";
 
 type Archived = { fid: number; p1: string; p2: string; iso1: string; iso2: string; goals: number; minutes: number };
 type Live = { fid: number; p1: string; p2: string; iso1: string; iso2: string };
@@ -41,6 +41,7 @@ export default function Lobby() {
     setRecent(getBets().slice(0, 8));
     setPlayed(getPlayed());
     syncProfile(); // push local score/spikes to the leaderboard backend
+    void flushSettleQueue(); // re-send any settles that failed while the backend was down
   }, []);
 
   // Archived = curated static replays + recently-finished matches (runtime),

@@ -158,6 +158,35 @@ export function setUsername(name: string) {
   localStorage.setItem(USERNAME_KEY, name);
 }
 
+// ── settle retry queue (durability for the proof ledger) ──────────
+// A settled bet is POSTed to /api/bets/settle to be persisted + proved. That POST
+// used to be fire-and-forget: if the backend was down (as during the July DB
+// outage) the call — and its proof — was lost forever. We now queue any failed
+// settle locally and re-send it on the next settle or app load, so a transient
+// backend blip can never silently drop a player's calls again. Keyed by
+// client_bet_id so re-queuing the same bet de-dupes.
+const SETTLE_Q_KEY = "spikes_settle_queue";
+type QueuedSettle = { id: string; body: unknown };
+
+export function getSettleQueue(): QueuedSettle[] {
+  if (!has()) return [];
+  try {
+    return JSON.parse(localStorage.getItem(SETTLE_Q_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+export function queueSettle(id: string, body: unknown) {
+  if (!has()) return;
+  const q = getSettleQueue().filter((x) => x.id !== id); // replace any prior attempt
+  q.push({ id, body });
+  localStorage.setItem(SETTLE_Q_KEY, JSON.stringify(q.slice(-100))); // bound the backlog
+}
+export function dequeueSettle(id: string) {
+  if (!has()) return;
+  localStorage.setItem(SETTLE_Q_KEY, JSON.stringify(getSettleQueue().filter((x) => x.id !== id)));
+}
+
 // ── payout wallet (Solana address for USDC rewards) ───────────────
 // Stored locally until the payout backend lands; it's the address a player's
 // pool share / SPIKES redemption would be sent to.
