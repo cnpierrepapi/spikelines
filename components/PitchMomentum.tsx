@@ -1,41 +1,42 @@
 "use client";
 
-// Momentum, drawn as a football pitch instead of a bar.
+// Momentum, drawn as a live football pitch on a <canvas> with a small physics
+// loop (requestAnimationFrame). Replaces the old momentum bar entirely.
 //
-// REAL (from TxLINE possession updates): which side is attacking (`attacker`) and
-// how dangerous it is (`tier` → how far the play pushes upfield). The ball leans
-// toward the goal being attacked, and the attacking team's shape pushes up.
+// REAL (from TxLINE possession updates): `attacker` (which side is attacking) and
+// `tier` (how dangerous → how hard the attack presses). Those two drive where the
+// players push and which goal the ball is worked toward.
 //
-// SIMULATED (cosmetic only — TxLINE doesn't give player coordinates): the dots'
-// formation, their idle bob, and the ball's vertical drift. Nothing here invents
-// match facts; it just animates the one real signal we have.
+// SIMULATED (cosmetic — TxLINE has no player coordinates): the players' formation,
+// their spring motion, and the ball's kick physics. The dots chase and KICK the
+// ball; on each possession update the whole shape slides to the attacked side.
+import { useEffect, useRef } from "react";
 
 type Tier = "safe" | "attack" | "danger" | "high_danger";
+const REACH: Record<Tier, number> = { safe: 0.08, attack: 0.2, danger: 0.34, high_danger: 0.46 };
 
-const REACH: Record<Tier, number> = { safe: 6, attack: 16, danger: 30, high_danger: 44 };
+const TEAM1 = "#5cc8ff"; // defends left goal, attacks right
+const TEAM2 = "#ff7a7a"; // defends right goal, attacks left
 
-// Base formation for the team that defends the LEFT goal (attacks right), in pitch
-// coords x:0(left)–100(right), y:0(top)–100(bottom). ~5 outfield + keeper.
-const BASE_L: { x: number; y: number; fwd: number }[] = [
-  { x: 5, y: 50, fwd: 0 },    // GK
-  { x: 22, y: 26, fwd: 0.3 }, // back line
-  { x: 20, y: 74, fwd: 0.3 },
-  { x: 38, y: 50, fwd: 0.7 }, // midfield
-  { x: 46, y: 32, fwd: 1 },   // forwards
-  { x: 46, y: 68, fwd: 1 },
+// Formation for the team defending the LEFT goal (x,y in 0..1 of the pitch). fwd =
+// how far up the player commits when their team attacks (GK ~0, forwards ~1).
+const FORMATION: { x: number; y: number; fwd: number }[] = [
+  { x: 0.05, y: 0.5, fwd: 0.0 },   // keeper
+  { x: 0.2, y: 0.24, fwd: 0.35 },  // back four
+  { x: 0.16, y: 0.5, fwd: 0.25 },
+  { x: 0.2, y: 0.76, fwd: 0.35 },
+  { x: 0.36, y: 0.34, fwd: 0.7 },  // midfield
+  { x: 0.36, y: 0.66, fwd: 0.7 },
+  { x: 0.34, y: 0.5, fwd: 0.6 },
+  { x: 0.5, y: 0.4, fwd: 1.0 },    // forwards
+  { x: 0.5, y: 0.6, fwd: 1.0 },
+  { x: 0.46, y: 0.5, fwd: 0.9 },
 ];
 
-const TEAM1_COLOR = "#5cc8ff"; // defends left, attacks right
-const TEAM2_COLOR = "#ff7a7a"; // defends right, attacks left
-
-function Flag({ iso, className }: { iso?: string; className?: string }) {
-  if (!iso) return null;
-  // eslint-disable-next-line @next/next/no-img-element
-  return <img src={`/flags/${iso}.png`} alt="" className={className} />;
-}
+type Dot = { x: number; y: number; vx: number; vy: number; team: 1 | 2; base: { x: number; y: number; fwd: number }; ph: number };
 
 export default function PitchMomentum({
-  tier, attacker, iso1, iso2, label, color, hot, progress,
+  tier, attacker, label, color, hot, progress,
 }: {
   tier: Tier;
   attacker: 1 | 2;
@@ -44,143 +45,172 @@ export default function PitchMomentum({
   label: string;
   color: string;
   hot: boolean;
-  progress?: number; // optional replay-progress bar (archived room)
+  progress?: number;
 }) {
-  const reach = REACH[tier] ?? 6;
-  const push = reach / 44; // 0..1 intensity
-  const attackingRight = attacker === 1; // team1 attacks the right goal
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Live inputs read by the loop without restarting it.
+  const state = useRef({ tier, attacker, color, hot });
+  state.current = { tier, attacker, color, hot };
 
-  // Ball leans toward the attacked goal; team1 attacking → right (x>50).
-  const ballX = 50 + (attackingRight ? reach : -reach);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
 
-  // Horizontal shift for a dot: advance toward the opponent goal when its team is
-  // attacking (scaled by how forward the player is), retreat slightly when defending.
-  const shiftFor = (isTeam1: boolean, fwd: number) => {
-    const dir = isTeam1 ? 1 : -1; // team1 advances right
-    const attacking = isTeam1 === attackingRight;
-    return attacking ? dir * push * 30 * fwd : -dir * push * 9 * fwd;
-  };
+    let W = 0, H = 0, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const resize = () => {
+      const r = canvas.getBoundingClientRect();
+      W = r.width; H = r.height;
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(canvas);
 
-  const dot = (isTeam1: boolean, i: number, b: { x: number; y: number; fwd: number }) => {
-    const baseX = isTeam1 ? b.x : 100 - b.x;
-    const left = Math.max(2, Math.min(98, baseX + shiftFor(isTeam1, b.fwd)));
-    return (
-      <span
-        key={`${isTeam1 ? "a" : "b"}${i}`}
-        className="pitch-dot"
-        style={{
-          left: `${left}%`,
-          top: `${b.y}%`,
-          background: isTeam1 ? TEAM1_COLOR : TEAM2_COLOR,
-          animationDelay: `${(i * 0.37).toFixed(2)}s`,
-        }}
-      />
-    );
-  };
+    // Build both teams from the formation (team2 is mirrored across the halfway line).
+    const dots: Dot[] = [];
+    for (const b of FORMATION) dots.push({ x: b.x, y: b.y, vx: 0, vy: 0, team: 1, base: b, ph: Math.random() * 6.28 });
+    for (const b of FORMATION) dots.push({ x: 1 - b.x, y: b.y, vx: 0, vy: 0, team: 2, base: { x: 1 - b.x, y: b.y, fwd: b.fwd }, ph: Math.random() * 6.28 });
+
+    const ball = { x: 0.5, y: 0.5, vx: 0, vy: 0 };
+    let kickCd = 0;
+    let last = performance.now();
+    let raf = 0;
+    let t = 0;
+
+    const loop = (now: number) => {
+      const dt = Math.min((now - last) / 16.67, 2.2); // frames, capped
+      last = now;
+      t += dt;
+      const { tier: tr, attacker: atk, color: col, hot: isHot } = state.current;
+      const reach = REACH[tr] ?? 0.08;
+      const attackingRight = atk === 1; // team1 attacks the right goal
+      const goalX = attackingRight ? 0.98 : 0.02; // the goal being attacked
+
+      // ── player targets ──────────────────────────────────────────
+      for (const d of dots) {
+        const teamAttacking = (d.team === 1) === attackingRight;
+        const dir = d.team === 1 ? 1 : -1; // team1 pushes right
+        // Attacking team commits upfield (scaled by player role + intensity);
+        // defending team holds a compact block, sagging slightly toward its own goal.
+        const shift = teamAttacking ? dir * reach * (0.4 + d.base.fwd) : -dir * reach * 0.18 * (0.4 + d.base.fwd);
+        const tx = Math.max(0.03, Math.min(0.97, d.base.x + shift));
+        // idle wander so nobody stands frozen
+        const wy = Math.sin(t * 0.04 + d.ph) * 0.012;
+        const ty = Math.max(0.08, Math.min(0.92, d.base.y + wy));
+
+        // spring toward target
+        d.vx += (tx - d.x) * 0.012 * dt;
+        d.vy += (ty - d.y) * 0.012 * dt;
+
+        // the nearest attacker chases the ball
+        if (teamAttacking) {
+          const bdx = ball.x - d.x, bdy = ball.y - d.y;
+          const bd = Math.hypot(bdx, bdy);
+          if (bd < 0.28 && d.base.fwd > 0.5) {
+            d.vx += (bdx / (bd + 1e-4)) * 0.02 * dt;
+            d.vy += (bdy / (bd + 1e-4)) * 0.02 * dt;
+          }
+        }
+        d.vx *= 0.86; d.vy *= 0.86;
+        d.x += d.vx * dt; d.y += d.vy * dt;
+      }
+
+      // ── ball physics: chased, kicked toward the attacked goal ────
+      kickCd -= dt;
+      for (const d of dots) {
+        const dx = ball.x - d.x, dy = ball.y - d.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 0.035 && kickCd <= 0) {
+          const kicking = (d.team === 1) === attackingRight;
+          const tgx = kicking ? goalX : (d.team === 1 ? 0.02 : 0.98);
+          const ang = Math.atan2(0.5 + (Math.random() - 0.5) * 0.5 - ball.y, tgx - ball.x);
+          const power = 0.012 + reach * 0.02 + Math.random() * 0.006;
+          ball.vx = Math.cos(ang) * power;
+          ball.vy = Math.sin(ang) * power;
+          kickCd = 12 + Math.random() * 10;
+        }
+      }
+      // drift toward the pressured third even without a kick (team pressure)
+      ball.vx += ((goalX - ball.x) * 0.0006 * (0.4 + reach)) * dt;
+      ball.vx *= 0.97; ball.vy *= 0.97;
+      ball.x += ball.vx * dt; ball.y += ball.vy * dt;
+      // walls: bounce off touchlines, clear off the goal lines back into play
+      if (ball.y < 0.06) { ball.y = 0.06; ball.vy = Math.abs(ball.vy) * 0.6; }
+      if (ball.y > 0.94) { ball.y = 0.94; ball.vy = -Math.abs(ball.vy) * 0.6; }
+      if (ball.x < 0.04) { ball.x = 0.06; ball.vx = Math.abs(ball.vx) * 0.5 + 0.004; }
+      if (ball.x > 0.96) { ball.x = 0.94; ball.vx = -Math.abs(ball.vx) * 0.5 - 0.004; }
+
+      draw(ctx, W, H, dots, ball, col, isHot);
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
+  }, []);
 
   return (
     <div className={`card-surface rounded-2xl p-4 ${hot ? "danger-glow" : ""}`}>
       <div className="flex items-center justify-between mb-3">
         <span className="text-xs uppercase tracking-widest text-muted">Momentum</span>
-        <span className="text-xs font-bold uppercase tracking-wider" style={{ color }}>
-          {hot && "⚠ "}{label}
-        </span>
+        <span className="text-xs font-bold uppercase tracking-wider" style={{ color }}>{hot && "⚠ "}{label}</span>
       </div>
-
-      <div className="pitch-wrap" style={{ boxShadow: hot ? `inset 0 0 40px ${color}55` : undefined }}>
-        {/* pitch markings */}
-        <svg viewBox="0 0 100 60" preserveAspectRatio="none" className="absolute inset-0 w-full h-full">
-          <g stroke="rgba(255,255,255,0.16)" strokeWidth="0.4" fill="none">
-            <rect x="1" y="1" width="98" height="58" />
-            <line x1="50" y1="1" x2="50" y2="59" />
-            <circle cx="50" cy="30" r="9" />
-            <rect x="1" y="16" width="14" height="28" />
-            <rect x="85" y="16" width="14" height="28" />
-            <rect x="1" y="24" width="5" height="12" />
-            <rect x="94" y="24" width="5" height="12" />
-          </g>
-          <circle cx="50" cy="30" r="0.9" fill="rgba(255,255,255,0.35)" />
-        </svg>
-
-        {/* which goal each team defends */}
-        <div className="pitch-end left"><Flag iso={iso1} className="pitch-flag" /></div>
-        <div className="pitch-end right"><Flag iso={iso2} className="pitch-flag" /></div>
-
-        {/* players (simulated positions, real push direction) */}
-        {BASE_L.map((b, i) => dot(true, i, b))}
-        {BASE_L.map((b, i) => dot(false, i, b))}
-
-        {/* the ball — horizontal position is the real momentum signal */}
-        <span
-          className={`pitch-ball ${hot ? "orb-pulse" : ""}`}
-          style={{ left: `${ballX}%`, background: color, boxShadow: `0 0 16px ${color}, 0 0 4px #fff` }}
-        />
-      </div>
-
+      <canvas ref={canvasRef} className="block w-full rounded-xl" style={{ aspectRatio: "16 / 9" }} />
       {typeof progress === "number" && (
         <div className="mt-3 h-1 rounded-full bg-white/5 overflow-hidden">
           <div className="h-full bg-primary/40" style={{ width: `${progress}%` }} />
         </div>
       )}
-
-      <style jsx>{`
-        .pitch-wrap {
-          position: relative;
-          width: 100%;
-          aspect-ratio: 16 / 9;
-          border-radius: 0.9rem;
-          overflow: hidden;
-          background:
-            repeating-linear-gradient(90deg, #0f3d24 0 12.5%, #0d3721 12.5% 25%),
-            linear-gradient(180deg, #124a2b, #0c3620);
-          border: 1px solid rgba(255, 255, 255, 0.08);
-        }
-        .pitch-dot {
-          position: absolute;
-          width: 3.4%;
-          aspect-ratio: 1;
-          border-radius: 9999px;
-          transform: translate(-50%, -50%);
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.25) inset;
-          transition: left 0.7s cubic-bezier(0.22, 1, 0.36, 1), top 0.7s cubic-bezier(0.22, 1, 0.36, 1);
-          animation: pitchbob 2.6s ease-in-out infinite alternate;
-        }
-        .pitch-ball {
-          position: absolute;
-          top: 50%;
-          width: 3.6%;
-          aspect-ratio: 1;
-          border-radius: 9999px;
-          transform: translate(-50%, -50%);
-          transition: left 0.6s cubic-bezier(0.22, 1, 0.36, 1);
-          animation: balldrift 2.1s ease-in-out infinite alternate;
-          z-index: 2;
-        }
-        .pitch-end {
-          position: absolute;
-          top: 50%;
-          transform: translateY(-50%);
-          opacity: 0.85;
-          z-index: 1;
-        }
-        .pitch-end.left { left: 1.5%; }
-        .pitch-end.right { right: 1.5%; }
-        .pitch-flag {
-          width: 22px;
-          height: 16px;
-          object-fit: cover;
-          border-radius: 2px;
-          box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2);
-        }
-        @keyframes pitchbob {
-          from { margin-top: -2px; }
-          to { margin-top: 2px; }
-        }
-        @keyframes balldrift {
-          from { margin-top: -7px; }
-          to { margin-top: 7px; }
-        }
-      `}</style>
     </div>
   );
+}
+
+// ── rendering (all in canvas pixel space) ─────────────────────────
+function draw(ctx: CanvasRenderingContext2D, W: number, H: number, dots: Dot[], ball: { x: number; y: number }, color: string, hot: boolean) {
+  ctx.clearRect(0, 0, W, H);
+
+  // turf with mowing stripes
+  const stripes = 8;
+  for (let i = 0; i < stripes; i++) {
+    ctx.fillStyle = i % 2 ? "#0d3721" : "#0f3d24";
+    ctx.fillRect((i / stripes) * W, 0, W / stripes + 1, H);
+  }
+  // markings
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.lineWidth = Math.max(1, W * 0.004);
+  const pad = W * 0.012;
+  ctx.strokeRect(pad, pad, W - pad * 2, H - pad * 2);
+  ctx.beginPath(); ctx.moveTo(W / 2, pad); ctx.lineTo(W / 2, H - pad); ctx.stroke();
+  ctx.beginPath(); ctx.arc(W / 2, H / 2, H * 0.16, 0, Math.PI * 2); ctx.stroke();
+  // penalty boxes
+  const boxW = W * 0.13, boxH = H * 0.46;
+  ctx.strokeRect(pad, (H - boxH) / 2, boxW, boxH);
+  ctx.strokeRect(W - pad - boxW, (H - boxH) / 2, boxW, boxH);
+
+  const rDot = Math.max(3.5, H * 0.032);
+  for (const d of dots) {
+    const px = d.x * W, py = d.y * H;
+    ctx.beginPath();
+    ctx.arc(px, py, rDot, 0, Math.PI * 2);
+    ctx.fillStyle = d.team === 1 ? TEAM1 : TEAM2;
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "rgba(0,0,0,0.35)";
+    ctx.stroke();
+  }
+
+  // ball
+  const bx = ball.x * W, by = ball.y * H, rB = Math.max(3, H * 0.026);
+  if (hot) { ctx.shadowColor = color; ctx.shadowBlur = 18; }
+  ctx.beginPath();
+  ctx.arc(bx, by, rB, 0, Math.PI * 2);
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = color;
+  ctx.stroke();
 }
