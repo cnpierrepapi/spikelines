@@ -37,7 +37,7 @@ const FORMATION: { x: number; y: number; fwd: number }[] = [
 type Dot = { x: number; y: number; vx: number; vy: number; team: 1 | 2; base: { x: number; y: number; fwd: number }; ph: number; ringA: number; ringR: number };
 
 export default function PitchMomentum({
-  tier, attacker, label, color, hot, progress, score = { p1: 0, p2: 0 },
+  tier, attacker, label, color, hot, progress, score = { p1: 0, p2: 0 }, corner,
 }: {
   tier: Tier;
   attacker: 1 | 2;
@@ -48,11 +48,12 @@ export default function PitchMomentum({
   hot: boolean;
   progress?: number;
   score?: { p1: number; p2: number }; // real scoreboard — the ball only enters a net on a goal
+  corner?: { side: 1 | 2; token: number } | null; // a real TxLINE corner — token changes each time
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // Live inputs read by the loop without restarting it.
-  const state = useRef({ tier, attacker, color, hot, score });
-  state.current = { tier, attacker, color, hot, score };
+  const state = useRef({ tier, attacker, color, hot, score, corner });
+  state.current = { tier, attacker, color, hot, score, corner };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -92,6 +93,9 @@ export default function PitchMomentum({
     // into the net when the REAL scoreboard increments. goalSide 0 = normal play.
     let lastP1 = 0, lastP2 = 0, warm = 0;
     let goalSide: 0 | 1 | 2 = 0, holdT = 0;
+    // Corner state: a real TxLINE corner sends the ball to the flag, crowds the box,
+    // then a delivery swings it in. cornerSide 0 = no corner in progress.
+    let cornerSide: 0 | 1 | 2 = 0, cornerT = 0, cornerY = 0.09, cornerDelivered = false, lastCornerTok = 0;
 
     const loop = (now: number) => {
       const dt = Math.min((now - last) / 16.67, 2.2); // frames, capped
@@ -114,6 +118,20 @@ export default function PitchMomentum({
       }
       const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 
+      // ── corner trigger: a new token starts the set-piece (unless a goal is
+      // celebrating). Pick a top/bottom flag on the side actually attacking. ──
+      const cn = state.current.corner;
+      if (cn && cn.token !== lastCornerTok) {
+        lastCornerTok = cn.token;
+        if (goalSide === 0) { cornerSide = cn.side; cornerT = 0; cornerDelivered = false; cornerY = Math.random() < 0.5 ? 0.085 : 0.915; }
+      }
+      const cornerActive = cornerSide !== 0 && goalSide === 0;
+      const cAttackRight = cornerSide === 1;        // side1 attacks right → right-side flag
+      const cornerX = cAttackRight ? 0.955 : 0.045;
+      const cBoxX = cAttackRight ? 0.8 : 0.2;       // where the attackers crowd
+      const cGoalLineX = cAttackRight ? 0.9 : 0.1;  // where the defenders line up
+      const cornerTaker = cornerSide === 1 ? press1 : press2;
+
       // ── player targets ──────────────────────────────────────────
       for (const d of dots) {
         const teamAttacking = (d.team === 1) === attackingRight;
@@ -125,7 +143,17 @@ export default function PitchMomentum({
         let ty = d.base.y + wy;
 
         const isPresser = d === press1 || d === press2;
-        if (active) {
+        if (cornerActive) {
+          // Set-piece shape: taker over the ball at the flag, attackers pack the
+          // box on a ring, defenders drop onto their own goal line.
+          const teamAtk = (d.team === 1) === cAttackRight;
+          if (teamAtk) {
+            if (d === cornerTaker) { tx = cornerX; ty = cornerY; }
+            else if (d.base.fwd > 0.25) { tx = cBoxX + Math.cos(d.ringA) * 0.09; ty = 0.5 + Math.sin(d.ringA) * 0.26; }
+          } else if (d.base.fwd > 0.02) {
+            tx = cGoalLineX; ty = 0.34 + (d.ringA / (Math.PI * 2)) * 0.32;
+          }
+        } else if (active) {
           if (isPresser) {
             // challenge the ball directly (this one can kick it)
             tx = ball.x; ty = ball.y;
@@ -177,6 +205,26 @@ export default function PitchMomentum({
         ball.vx *= 0.92; ball.vy *= 0.92;
         ball.x += ball.vx * dt; ball.y += ball.vy * dt;
         if (holdT > 55) { ball.x = 0.5; ball.y = 0.5; ball.vx = 0; ball.vy = 0; goalSide = 0; holdT = 0; }
+      } else if (cornerSide !== 0) {
+        // CORNER: settle the ball on the flag, hold for the set-piece, then swing
+        // one delivery into the box before play resumes.
+        cornerT += dt;
+        if (cornerT < 30) {
+          ball.vx += (cornerX - ball.x) * 0.05 * dt;
+          ball.vy += (cornerY - ball.y) * 0.05 * dt;
+        } else if (!cornerDelivered) {
+          const ang = Math.atan2(0.5 + (Math.random() - 0.5) * 0.3 - ball.y, cBoxX - ball.x);
+          const power = 0.03 + Math.random() * 0.008;
+          ball.vx = Math.cos(ang) * power; ball.vy = Math.sin(ang) * power;
+          cornerDelivered = true;
+        }
+        ball.vx *= 0.95; ball.vy *= 0.95;
+        ball.x += ball.vx * dt; ball.y += ball.vy * dt;
+        if (ball.y < 0.05) { ball.y = 0.05; ball.vy = Math.abs(ball.vy) * 0.5; }
+        if (ball.y > 0.95) { ball.y = 0.95; ball.vy = -Math.abs(ball.vy) * 0.5; }
+        if (ball.x < 0.04) ball.x = 0.04;
+        if (ball.x > 0.96) ball.x = 0.96;
+        if (cornerT > 52) { cornerSide = 0; cornerT = 0; } // hand back to normal play
       } else {
         // NORMAL PLAY: chased + kicked toward the attacked goal, but kept OUT of the
         // goal area — the ball can't cross the line without a real goal.
@@ -204,7 +252,7 @@ export default function PitchMomentum({
         if (ball.x > 0.91) { ball.x = 0.9; ball.vx = -Math.abs(ball.vx) * 0.5 - 0.004; }
       }
 
-      draw(ctx, W, H, dots, ball, col, isHot, goalSide);
+      draw(ctx, W, H, dots, ball, col, isHot, goalSide, cornerSide !== 0 ? { x: cornerX, y: cornerY } : null);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -229,7 +277,7 @@ export default function PitchMomentum({
 }
 
 // ── rendering (all in canvas pixel space) ─────────────────────────
-function draw(ctx: CanvasRenderingContext2D, W: number, H: number, dots: Dot[], ball: { x: number; y: number }, color: string, hot: boolean, goalSide: 0 | 1 | 2) {
+function draw(ctx: CanvasRenderingContext2D, W: number, H: number, dots: Dot[], ball: { x: number; y: number }, color: string, hot: boolean, goalSide: 0 | 1 | 2, cornerFlag: { x: number; y: number } | null) {
   ctx.clearRect(0, 0, W, H);
 
   // turf with mowing stripes
@@ -267,6 +315,21 @@ function draw(ctx: CanvasRenderingContext2D, W: number, H: number, dots: Dot[], 
   };
   goal(1, goalSide === 2);          // left goal (team1 defends) — lit when team2 scores
   goal(W - 1 - gd, goalSide === 1); // right goal (team2 defends) — lit when team1 scores
+
+  // corner flag — a little yellow pennant at the active corner during a set-piece
+  if (cornerFlag) {
+    const fx = cornerFlag.x * W, fy = cornerFlag.y * H;
+    const poleH = H * 0.11, dir = cornerFlag.x > 0.5 ? -1 : 1;
+    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.lineWidth = Math.max(1.5, W * 0.004);
+    ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(fx, fy - poleH); ctx.stroke();
+    ctx.fillStyle = "#f5c800";
+    ctx.beginPath();
+    ctx.moveTo(fx, fy - poleH);
+    ctx.lineTo(fx + dir * W * 0.03, fy - poleH + H * 0.03);
+    ctx.lineTo(fx, fy - poleH + H * 0.055);
+    ctx.closePath(); ctx.fill();
+  }
 
   const rDot = Math.max(3.5, H * 0.032);
   for (const d of dots) {

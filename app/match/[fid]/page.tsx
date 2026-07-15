@@ -8,6 +8,7 @@ import { celebrateFrom } from "@/lib/celebrate";
 import { settleBet } from "@/lib/remote";
 import { MatchStatsPanel } from "@/components/match-stats";
 import PitchMomentum from "@/components/PitchMomentum";
+import { EventToasts, type Toast } from "@/components/EventToasts";
 import { type MarketKind, type Side, type Trigger, sideOf, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
 type Tier = "safe" | "attack" | "danger" | "high_danger";
@@ -71,6 +72,8 @@ export default function ReplayMatch() {
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [bets, setBets] = useState<Bet[]>([]);
   const [events, setEvents] = useState<{ id: number; icon: string; label: string; min: number }[]>([]);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [cornerSig, setCornerSig] = useState<{ side: 1 | 2; token: number } | null>(null);
   const [justWon, setJustWon] = useState<number[]>([]);
   const [graduated, setGraduated] = useState(false);
   const [blocked, setBlocked] = useState(false); // one-shot: already played this match
@@ -199,6 +202,13 @@ export default function ReplayMatch() {
   const addEvent = useCallback((icon: string, label: string) => {
     eventsRef.current = [{ id: Date.now() + Math.random(), icon, label, min: Math.floor(secRef.current / 60) }, ...eventsRef.current].slice(0, 12);
     setEvents(eventsRef.current.slice());
+  }, []);
+
+  // Non-intrusive top-of-screen popup for a key event; auto-dismisses.
+  const pushToast = useCallback((icon: string, label: string, kind: Toast["kind"]) => {
+    const id = Date.now() + Math.random();
+    setToasts((t) => [...t, { id, icon, label, kind }].slice(-3));
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3200);
   }, []);
 
   // Streak milestone: actually credit the bonus (was previously never awarded),
@@ -346,16 +356,16 @@ export default function ReplayMatch() {
         };
         const n1 = entryRef.current?.p1 ?? "Home";
         const n2 = entryRef.current?.p2 ?? "Away";
-        if (cur.g1 > pc.g1) { addEvent("⚽", `Goal — ${n1}`); settle({ kind: "goal", side: 1 }); }
+        if (cur.g1 > pc.g1) { addEvent("⚽", `Goal — ${n1}`); pushToast("⚽", `Goal — ${n1}`, "goal"); settle({ kind: "goal", side: 1 }); }
         else if (cur.g1 < pc.g1) addEvent("🚫", `Goal disallowed (VAR) — ${n1}`);
-        if (cur.g2 > pc.g2) { addEvent("⚽", `Goal — ${n2}`); settle({ kind: "goal", side: 2 }); }
+        if (cur.g2 > pc.g2) { addEvent("⚽", `Goal — ${n2}`); pushToast("⚽", `Goal — ${n2}`, "goal"); settle({ kind: "goal", side: 2 }); }
         else if (cur.g2 < pc.g2) addEvent("🚫", `Goal disallowed (VAR) — ${n2}`);
-        if (cur.c1 > pc.c1) { addEvent("🚩", `Corner — ${n1}`); settle({ kind: "corner", side: 1 }); }
-        if (cur.c2 > pc.c2) { addEvent("🚩", `Corner — ${n2}`); settle({ kind: "corner", side: 2 }); }
-        if (cur.r1 > pc.r1) { addEvent("🟥", `Red card — ${n1}`); settle({ kind: "red", side: 1 }); }
-        if (cur.r2 > pc.r2) { addEvent("🟥", `Red card — ${n2}`); settle({ kind: "red", side: 2 }); }
-        if (cur.y1 > pc.y1) { addEvent("🟨", `Yellow — ${n1}`); settle({ kind: "yellow", side: 1 }); }
-        if (cur.y2 > pc.y2) { addEvent("🟨", `Yellow — ${n2}`); settle({ kind: "yellow", side: 2 }); }
+        if (cur.c1 > pc.c1) { addEvent("🚩", `Corner — ${n1}`); pushToast("🚩", `Corner — ${n1}`, "corner"); setCornerSig({ side: 1, token: Date.now() }); settle({ kind: "corner", side: 1 }); }
+        if (cur.c2 > pc.c2) { addEvent("🚩", `Corner — ${n2}`); pushToast("🚩", `Corner — ${n2}`, "corner"); setCornerSig({ side: 2, token: Date.now() }); settle({ kind: "corner", side: 2 }); }
+        if (cur.r1 > pc.r1) { addEvent("🟥", `Red card — ${n1}`); pushToast("🟥", `Red card — ${n1}`, "red"); settle({ kind: "red", side: 1 }); }
+        if (cur.r2 > pc.r2) { addEvent("🟥", `Red card — ${n2}`); pushToast("🟥", `Red card — ${n2}`, "red"); settle({ kind: "red", side: 2 }); }
+        if (cur.y1 > pc.y1) { addEvent("🟨", `Yellow — ${n1}`); pushToast("🟨", `Yellow card — ${n1}`, "yellow"); settle({ kind: "yellow", side: 1 }); }
+        if (cur.y2 > pc.y2) { addEvent("🟨", `Yellow — ${n2}`); pushToast("🟨", `Yellow card — ${n2}`, "yellow"); settle({ kind: "yellow", side: 2 }); }
         prev.current = cur;
         setScore({ p1: cur.g1, p2: cur.g2 });
         setStats({ c1: cur.c1, c2: cur.c2, y1: cur.y1, y2: cur.y2, r1: cur.r1, r2: cur.r2 });
@@ -364,7 +374,7 @@ export default function ReplayMatch() {
       // settle "no" calls whose window has elapsed
       settle(null);
     },
-    [settle, addEvent, teamName]
+    [settle, addEvent, teamName, pushToast]
   );
 
   // Replay loop
@@ -474,7 +484,7 @@ export default function ReplayMatch() {
           </div>
         )}
 
-        <PitchMomentum tier={tier} attacker={attacker} iso1={entry?.iso1} iso2={entry?.iso2} label={ti.label} color={ti.color} hot={hot} progress={progress} score={score} />
+        <PitchMomentum tier={tier} attacker={attacker} iso1={entry?.iso1} iso2={entry?.iso2} label={ti.label} color={ti.color} hot={hot} progress={progress} score={score} corner={cornerSig} />
 
         <div className="flex items-center justify-between px-1">
           <div className="flex items-center gap-2">
@@ -536,6 +546,8 @@ export default function ReplayMatch() {
           </aside>
         </div>
       </main>
+
+      <EventToasts toasts={toasts} />
 
       {prompt && <PromptCard prompt={prompt} onAnswer={answer} />}
 

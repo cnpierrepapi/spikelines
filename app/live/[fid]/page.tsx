@@ -8,6 +8,7 @@ import { celebrateFrom } from "@/lib/celebrate";
 import { settleBet } from "@/lib/remote";
 import { MatchStatsPanel } from "@/components/match-stats";
 import PitchMomentum from "@/components/PitchMomentum";
+import { EventToasts, type Toast } from "@/components/EventToasts";
 import { type MarketKind, type Side, type Trigger, pickMarket, pickWindow, marketMatches, marketQuestion, marketLabel, marketHeader } from "@/lib/markets";
 
 type Tier = "safe" | "attack" | "danger" | "high_danger";
@@ -54,6 +55,8 @@ export default function LiveMatch() {
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [bets, setBets] = useState<Bet[]>([]);
   const [events, setEvents] = useState<Evt[]>([]);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [cornerSig, setCornerSig] = useState<{ side: 1 | 2; token: number } | null>(null);
   const [justWon, setJustWon] = useState<number[]>([]);
   const [graduated, setGraduated] = useState(false);
   const [saveOffer, setSaveOffer] = useState<{ cost: number; streak: number } | null>(null);
@@ -134,6 +137,13 @@ export default function LiveMatch() {
   const addEvent = useCallback((icon: string, label: string) => {
     eventsRef.current = [{ id: Date.now() + Math.random(), icon, label, min: Math.floor(secRef.current / 60) }, ...eventsRef.current].slice(0, 12);
     setEvents(eventsRef.current.slice());
+  }, []);
+
+  // Non-intrusive top-of-screen popup for a key event; auto-dismisses.
+  const pushToast = useCallback((icon: string, label: string, kind: Toast["kind"]) => {
+    const id = Date.now() + Math.random();
+    setToasts((t) => [...t, { id, icon, label, kind }].slice(-3));
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3200);
   }, []);
 
   // Tally a provable stat as it lands (goals come from the authoritative score).
@@ -370,10 +380,10 @@ export default function LiveMatch() {
           settle(null);
           return;
         }
-        if (ev.kind === "goal") addEvent("⚽", `Goal — ${teamName(side)}`);
-        else if (ev.kind === "corner") addEvent("🚩", `Corner — ${teamName(side)}`);
-        else if (ev.kind === "yellow") addEvent("🟨", `Yellow card — ${teamName(side)}`);
-        else if (ev.kind === "red") addEvent("🟥", `Red card — ${teamName(side)}`);
+        if (ev.kind === "goal") { addEvent("⚽", `Goal — ${teamName(side)}`); pushToast("⚽", `Goal — ${teamName(side)}`, "goal"); }
+        else if (ev.kind === "corner") { addEvent("🚩", `Corner — ${teamName(side)}`); pushToast("🚩", `Corner — ${teamName(side)}`, "corner"); setCornerSig({ side, token: Date.now() }); }
+        else if (ev.kind === "yellow") { addEvent("🟨", `Yellow card — ${teamName(side)}`); pushToast("🟨", `Yellow card — ${teamName(side)}`, "yellow"); }
+        else if (ev.kind === "red") { addEvent("🟥", `Red card — ${teamName(side)}`); pushToast("🟥", `Red card — ${teamName(side)}`, "red"); }
         bumpStat(ev.kind, side);
         // Each stat kind is its own provable market (goal/corner/yellow/red).
         settle({ kind: ev.kind as MarketKind, side });
@@ -396,7 +406,7 @@ export default function LiveMatch() {
     };
     es.onerror = () => setConnected(false);
     return () => es.close();
-  }, [fid, settle, teamName, addEvent, bumpStat, finalize, applyClock, firePrompt]);
+  }, [fid, settle, teamName, addEvent, bumpStat, finalize, applyClock, firePrompt, pushToast]);
 
   const ti = TIER[tier];
   const hot = tier === "high_danger";
@@ -448,7 +458,7 @@ export default function LiveMatch() {
               </div>
             )}
 
-            <PitchMomentum tier={tier} attacker={attacker} iso1={entry?.iso1} iso2={entry?.iso2} label={ti.label} color={ti.color} hot={hot} score={score} />
+            <PitchMomentum tier={tier} attacker={attacker} iso1={entry?.iso1} iso2={entry?.iso2} label={ti.label} color={ti.color} hot={hot} score={score} corner={cornerSig} />
             {!seen && <div className="text-muted text-xs -mt-2 text-center">waiting for the match to come alive…</div>}
 
             <div className="flex items-center justify-between px-1">
@@ -506,6 +516,8 @@ export default function LiveMatch() {
           </aside>
         </div>
       </main>
+
+      <EventToasts toasts={toasts} />
 
       {prompt && <PromptCard prompt={prompt} onAnswer={answer} />}
 
