@@ -1,4 +1,6 @@
-import { bot } from "./bot.ts";
+import { bot } from "./instance.ts";
+import "./bot.ts"; // registers commands + the tap handler
+import { startWatching } from "./watcher.ts";
 import { env } from "./env.ts";
 
 // Entry point: long-polling worker. No public webhook — the process just holds a
@@ -22,6 +24,9 @@ async function main() {
   const stop = () => bot.stop();
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
+
+  // Fire the match watcher alongside the long-poll (it runs its own loop forever).
+  startWatching().catch((e) => console.error("watcher crashed:", e));
 
   await bot.start({
     drop_pending_updates: true,

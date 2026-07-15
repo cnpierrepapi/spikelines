@@ -72,7 +72,9 @@ export async function pollMatchOnce(opts: {
     headers: { Authorization: `Bearer ${jwt}`, "X-Api-Token": apiToken },
     cache: "no-store",
     signal,
-  });
+    // `cache` is valid on Next/undici fetch but absent from @types/node's RequestInit;
+    // the assertion keeps this file compiling under both the app (dom) and the bot (node).
+  } as RequestInit);
   if (!res.ok) { emit({ t: "error", msg: `upstream ${res.status}` }); return; }
   const j: any = await res.json();
   const arr: any[] = Array.isArray(j) ? j : [j];

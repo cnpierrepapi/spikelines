@@ -1,8 +1,8 @@
-import { Bot, InlineKeyboard, GrammyError } from "grammy";
+import { InlineKeyboard, GrammyError } from "grammy";
+import { bot } from "./instance.ts";
 import { env } from "./env.ts";
 import { ensureUser, getUser, upsertChat, setChatActive, setChatQuiet, groupTop } from "./db.ts";
-
-export const bot = new Bot(env.BOT_TOKEN);
+import { handleAnswer } from "./calls.ts";
 
 const isGroup = (t: string) => t === "group" || t === "supergroup";
 
@@ -148,6 +148,21 @@ bot.on("my_chat_member", async (ctx) => {
     } catch {
       // no send permission yet — fine, registration still stands
     }
+  }
+});
+
+// A YES/NO tap on a group call. callback_data = "ans:<callId>:<YES|NO>".
+bot.callbackQuery(/^ans:(\d+):(YES|NO)$/, async (ctx) => {
+  const from = ctx.from;
+  if (!from) return;
+  const callId = Number(ctx.match[1]);
+  const choice = ctx.match[2] as "YES" | "NO";
+  try {
+    const text = await handleAnswer(callId, from.id, choice, { username: from.username, firstName: from.first_name });
+    await ctx.answerCallbackQuery({ text });
+  } catch (e) {
+    console.error("answer", e);
+    await ctx.answerCallbackQuery({ text: "Something went wrong, try again." });
   }
 });
 

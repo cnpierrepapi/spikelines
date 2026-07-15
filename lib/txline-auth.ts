@@ -11,7 +11,7 @@ export async function mintJwt(base?: string): Promise<string | null> {
   const now = Date.now();
   if (cached && cached.exp > now) return cached.jwt;
   try {
-    const jwt = (await (await fetch(`${base}/auth/guest/start`, { method: "POST" })).json())?.token;
+    const jwt = ((await (await fetch(`${base}/auth/guest/start`, { method: "POST" })).json()) as any)?.token;
     if (!jwt) return cached?.jwt ?? null;
     cached = { jwt, exp: now + 20 * 86_400_000 }; // token lasts ~30d; refresh well before
     return jwt;
