@@ -64,15 +64,15 @@ export default function Lobby() {
       <UsernameGate />
       <nav className="sticky top-0 z-30 nav-blur border-b border-white/[0.06]">
         <div className="app-container flex items-center justify-between py-3">
-          <Link href="/" className="flex items-center gap-2">
+          <Link href="/" className="flex items-center gap-2 shrink-0">
             <span className="text-primary font-black text-xl tracking-tight">SPIKES</span>
-            <span className="text-muted text-sm">· Spikelines</span>
+            <span className="text-muted text-sm hidden sm:inline">· Spikelines</span>
           </Link>
-          <div className="flex items-center gap-3">
-            <Link href="/leaderboard" className="text-sm text-muted hover:text-foreground">Leaderboard</Link>
-            <Link href="/proof" className="text-sm text-primary hover:text-foreground font-semibold">⛓ Proof</Link>
-            <Link href="/profile" className="text-sm text-muted hover:text-foreground">Profile</Link>
-            <Link href="/profile" className="text-sm font-mono px-3 py-1.5 rounded-full border border-white/10 hover:border-primary/40 transition">
+          <div className="flex items-center gap-2.5 sm:gap-3">
+            <Link href="/leaderboard" className="text-xs sm:text-sm text-muted hover:text-foreground">Leaderboard</Link>
+            <Link href="/proof" className="text-xs sm:text-sm text-primary hover:text-foreground font-semibold">⛓ Proof</Link>
+            <Link href="/profile" className="text-xs sm:text-sm text-muted hover:text-foreground">Profile</Link>
+            <Link href="/profile" className="text-xs sm:text-sm font-mono px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-full border border-white/10 hover:border-primary/40 transition shrink-0">
               <span className="text-primary font-bold">{balance.toLocaleString()}</span> <span className="text-muted">SPIKES</span>
             </Link>
           </div>

@@ -30,16 +30,6 @@ type Bet = {
   recheckable?: boolean; // proof not final + not terminal → worth an auto re-check
 };
 type Fixture = { fixture_id: number; match: string };
-// Gate 3 — our own deployed program's on-chain record of the corrected match result.
-type TruthRecord = {
-  recordPda: string;
-  commitTx: string | null;
-  truth: { p1: number; p2: number };
-  anchored: { p1: number; p2: number };
-  diverges: boolean;
-  varApplied: boolean;
-  slot: number;
-};
 type Independent = { ok: boolean; absent?: boolean; detail?: string; baseOk?: boolean; settleOk?: boolean };
 type Result = { txSig?: string | null; status?: string; detail?: string; delta?: number | null; reverted?: boolean; clawed?: number; revertReason?: string | null; independent?: Independent | null; cluster?: string };
 
@@ -78,8 +68,6 @@ export default function ProofPage() {
   const [outcome, setOutcome] = useState("");
   const [busy, setBusy] = useState<number | null>(null);
   const [results, setResults] = useState<Record<number, Result>>({});
-  const [oracle, setOracle] = useState<Record<number, TruthRecord | null>>({});
-  const [oracleCluster, setOracleCluster] = useState("devnet");
   const [watching, setWatching] = useState(false);
   const betsRef = useRef<Bet[]>([]);
   const sweepingRef = useRef(false);
@@ -108,27 +96,6 @@ export default function ProofPage() {
   useEffect(() => {
     betsRef.current = bets;
   }, [bets]);
-
-  // GATE 3 — read our own program's on-chain corrected-result record for every
-  // fixture on the board (batched, deduped). Read-only devnet lookup; nothing is
-  // signed or deployed. Fixtures we haven't fetched yet get looked up once.
-  useEffect(() => {
-    const need = [...new Set(bets.map((b) => b.fixture_id))].filter((fid) => !(fid in oracle));
-    if (!need.length) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const j = await fetch(`/api/proof/oracle?fids=${need.join(",")}`).then((r) => r.json());
-        if (cancelled || !j.ok) return;
-        if (j.cluster) setOracleCluster(j.cluster);
-        setOracle((prev) => ({ ...prev, ...(j.records ?? {}) }));
-      } catch {
-        // best-effort: leave Gate 3 unshown for these fixtures
-        if (!cancelled) setOracle((prev) => ({ ...prev, ...Object.fromEntries(need.map((f) => [f, null])) }));
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [bets, oracle]);
 
   // AUTOMATIC availability watcher. A bet settles greyed because TxLINE hasn't
   // posted its on-chain root yet; the root shows up minutes later. Rather than make
@@ -242,16 +209,14 @@ export default function ProofPage() {
           <span className="text-foreground font-semibold">Verify</span> to re-check any call yourself.
         </p>
         <p className="text-xs text-muted leading-relaxed mb-1">
-          Three checks, not one.{" "}
+          Two checks, not one.{" "}
           <span className="text-foreground font-semibold">Gate&nbsp;1</span> — we rebuild TxLINE&apos;s Merkle
           proof ourselves (<span className="font-mono">sha256</span>, no Anchor program, no wallet) and confirm the
           stat value matches their published sub-tree root; it catches a tampered value that{" "}
           <span className="font-mono text-primary">validate_stat</span> alone would take on trust.{" "}
           <span className="text-foreground font-semibold">Gate&nbsp;2</span> — <span className="font-mono text-primary">validate_stat</span>{" "}
-          anchors that sub-tree to TxLINE&apos;s on-chain daily root (their mainnet program).{" "}
-          <span className="text-foreground font-semibold">Gate&nbsp;3</span> — <span className="text-foreground">our own
-          deployed Solana program</span> holds an immutable, timestamped record of the VAR-aware corrected match
-          result, linked back to TxLINE&apos;s root. Every gate links to its own explorer receipt — trust none of us.
+          anchors that sub-tree to TxLINE&apos;s on-chain daily root (their mainnet program).
+          Each gate links to its own explorer receipt — trust none of us.
         </p>
         <p className="text-xs text-muted mb-5">
           {loading ? "loading…" : `${bets.length} calls shown · ${anchoredCount} anchored on-chain`}
@@ -287,12 +252,9 @@ export default function ProofPage() {
             const working = busy === b.id;
             // Gate 2 lands on mainnet in prod; the route tells us which cluster it used.
             const gate2Cluster = res?.cluster || "mainnet-beta";
-            // Gate 3 = our own program's on-chain corrected-result record (devnet).
-            const o = oracle[b.fixture_id];
-            const oLoaded = b.fixture_id in oracle;
-            // Show the full 3-gate panel once the row has any on-chain artifact or the
-            // user has tapped Verify (res set) — so one tap surfaces all three gates.
-            const showGates = !!(res || b.proof_tx || b.proof_root || b.reverted || o);
+            // Show the gate panel once the row has any on-chain artifact or the user
+            // has tapped Verify (res set) — so one tap surfaces both gates.
+            const showGates = !!(res || b.proof_tx || b.proof_root || b.reverted);
             return (
               <div key={b.id} className="card-surface rounded-xl p-3.5">
                 <div className="flex items-center justify-between gap-3">
@@ -379,37 +341,6 @@ export default function ProofPage() {
                         </a>
                       ) : (
                         <span className="text-muted shrink-0">root not posted yet</span>
-                      )}
-                    </div>
-
-                    {/* GATE 3 — OUR own deployed program's corrected-result record, on devnet */}
-                    <div className="flex items-center justify-between gap-2 text-[10px] font-mono">
-                      {o ? (
-                        <>
-                          <span className="truncate">
-                            <span className={`font-bold ${o.diverges ? "text-destructive" : "text-success"}`}>{o.diverges ? "⚠" : "✓"} Gate&nbsp;3</span>
-                            <span className="text-foreground"> our program</span>
-                            <span className="text-muted"> · {o.diverges ? `caught VAR discrepancy (${o.truth.p1}–${o.truth.p2} vs anchored ${o.anchored.p1}–${o.anchored.p2})` : `corrected result ${o.truth.p1}–${o.truth.p2}`} · devnet</span>
-                          </span>
-                          <a
-                            href={o.commitTx ? explorerTxOn(o.commitTx, oracleCluster) : explorerAddrOn(o.recordPda, oracleCluster)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className={`shrink-0 hover:underline ${o.diverges ? "text-destructive" : "text-success"}`}
-                            title="Our own deployed Solana program's immutable record of the corrected result"
-                          >
-                            ⛓ {o.commitTx ? `tx ${o.commitTx.slice(0, 4)}…${o.commitTx.slice(-4)}` : `rec ${o.recordPda.slice(0, 4)}…${o.recordPda.slice(-4)}`} ↗
-                          </a>
-                        </>
-                      ) : (
-                        <>
-                          <span className="truncate">
-                            <span className="font-bold text-muted">• Gate&nbsp;3</span>
-                            <span className="text-foreground"> our program</span>
-                            <span className="text-muted"> · {oLoaded ? "no record committed for this fixture" : "checking devnet…"} · devnet</span>
-                          </span>
-                          <span className="text-muted shrink-0">—</span>
-                        </>
                       )}
                     </div>
                   </div>
