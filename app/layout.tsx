@@ -12,9 +12,28 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const SITE_URL = "https://spikelines.vercel.app";
+const TITLE = "Spikelines — feel the match";
+const DESCRIPTION =
+  "As a team builds an attack, a 5-second call fires. Tap YES / NO, build a streak, earn SPIKES on live World Cup data, verified on Solana.";
+
 export const metadata: Metadata = {
-  title: "Spikelines — feel the match",
-  description: "Tap the momentum. A SPIKES game on live World Cup data.",
+  metadataBase: new URL(SITE_URL),
+  title: TITLE,
+  description: DESCRIPTION,
+  applicationName: "Spikelines",
+  openGraph: {
+    type: "website",
+    url: SITE_URL,
+    siteName: "Spikelines",
+    title: TITLE,
+    description: DESCRIPTION,
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: TITLE,
+    description: DESCRIPTION,
+  },
 };
 
 export default function RootLayout({

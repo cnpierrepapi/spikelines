@@ -1,0 +1,10 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Spikelines">
+  <rect width="512" height="512" rx="116" fill="#050e1a"/>
+  <rect x="8" y="8" width="496" height="496" rx="108" fill="none" stroke="#f5c800" stroke-opacity="0.18" stroke-width="6"/>
+  <polyline
+    points="72,316 176,316 240,316 280,120 320,316 372,316 404,244 440,316"
+    fill="none" stroke="#f5c800" stroke-width="32"
+    stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="280" cy="120" r="30" fill="#f5c800"/>
+  <circle cx="280" cy="120" r="30" fill="none" stroke="#050e1a" stroke-width="8"/>
+</svg>
