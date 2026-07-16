@@ -19,6 +19,7 @@ export type TgUser = {
   best_streak: number;
   calls: number;
   correct: number;
+  notify: boolean;
 };
 
 export async function getUser(tgId: number): Promise<TgUser | null> {
@@ -145,13 +146,55 @@ export async function setAnswerOutcome(callId: number, tgId: number, outcome: "w
 // Read-modify-write result application. Low concurrency (one settle at a time per
 // call); an atomic RPC can replace this later if two calls ever settle a shared
 // user in the same tick.
-export async function applyUserResult(tgId: number, won: boolean, reward: number): Promise<TgUser | null> {
+export async function applyUserResult(tgId: number, won: boolean, reward: number): Promise<{ user: TgUser; prevStreak: number; streak: number } | null> {
   const u = await getUser(tgId);
   if (!u) return null;
+  const prevStreak = u.streak;
   const streak = won ? u.streak + 1 : 0;
   const upd = { spikes: u.spikes + reward, calls: u.calls + 1, correct: u.correct + (won ? 1 : 0), streak, best_streak: Math.max(u.best_streak, streak), updated_at: new Date().toISOString() };
   await supa.from("tg_users").update(upd).eq("tg_id", tgId);
-  return { ...u, ...upd } as TgUser;
+  return { user: { ...u, ...upd } as TgUser, prevStreak, streak };
+}
+
+// ── T8 streak saves ─────────────────────────────────────────────────
+// Record a single-use save offer; the button only carries this id, so nothing about
+// the price or target streak is client-trusted.
+export async function insertStreakSave(tgId: number, chatId: number, prevStreak: number, cost: number): Promise<number> {
+  const { data, error } = await supa.from("tg_streak_saves")
+    .insert({ tg_id: tgId, chat_id: chatId, prev_streak: prevStreak, cost }).select("id").single();
+  if (error) throw error;
+  return (data as any).id as number;
+}
+
+type SaveResult =
+  | { ok: true; streak: number; cost: number; spikes: number }
+  | { ok: false; reason: "gone" | "used" | "expired" | "insufficient" };
+
+// Redeem a save: verify it belongs to this user, is unused and unexpired, and they can
+// afford it, then charge SPIKES and restore both the global streak and this group's
+// board streak. RMW under the same low-concurrency assumption as applyUserResult.
+export async function redeemStreakSave(saveId: number, tgId: number, windowMs: number): Promise<SaveResult> {
+  const { data } = await supa.from("tg_streak_saves").select("*").eq("id", saveId).eq("tg_id", tgId).maybeSingle();
+  const s = data as any;
+  if (!s) return { ok: false, reason: "gone" };
+  if (s.used) return { ok: false, reason: "used" };
+  if (new Date(s.created_at).getTime() < Date.now() - windowMs) return { ok: false, reason: "expired" };
+  const u = await getUser(tgId);
+  if (!u) return { ok: false, reason: "gone" };
+  if (u.spikes < s.cost) return { ok: false, reason: "insufficient" };
+  const streak = s.prev_streak as number;
+  const spikes = u.spikes - s.cost;
+  await supa.from("tg_users")
+    .update({ spikes, streak, best_streak: Math.max(u.best_streak, streak), updated_at: new Date().toISOString() })
+    .eq("tg_id", tgId);
+  const { data: g } = await supa.from("tg_group_scores").select("streak, best_streak").eq("chat_id", s.chat_id).eq("tg_id", tgId).maybeSingle();
+  if (g) {
+    await supa.from("tg_group_scores")
+      .update({ streak, best_streak: Math.max((g as any).best_streak, streak), updated_at: new Date().toISOString() })
+      .eq("chat_id", s.chat_id).eq("tg_id", tgId);
+  }
+  await supa.from("tg_streak_saves").update({ used: true, used_at: new Date().toISOString() }).eq("id", saveId);
+  return { ok: true, streak, cost: s.cost, spikes };
 }
 // ── notifications + ranking ─────────────────────────────────────────
 export async function notifiableUsers(): Promise<{ tg_id: number; handle: string; streak: number }[]> {

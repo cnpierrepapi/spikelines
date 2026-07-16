@@ -1,7 +1,8 @@
 import { InlineKeyboard } from "grammy";
 import { bot } from "./instance.ts";
 import { env } from "./env.ts";
-import { GROUP_REWARD, ARCHIVED_REWARD, DECISION_WINDOW_MS, CALL_COOLDOWN_MS } from "./config.ts";
+import { GROUP_REWARD, ARCHIVED_REWARD, DECISION_WINDOW_MS, CALL_COOLDOWN_MS, STREAK_SAVE_MIN, STREAK_MILESTONES } from "./config.ts";
+import { offerStreakSave, dmMilestone } from "./notify.ts";
 import {
   activeGroups, hasBlockingCall, insertCall, setCallMessage, getCall, recordAnswer, tally,
   openCallsForFixture, markSettled, answersFor, setAnswerOutcome, applyUserResult, applyGroupResult,
@@ -90,9 +91,17 @@ export async function settleOne(call: TgCall, result: "yes" | "no", settleTs: nu
     const reward = won ? rewardBase : 0;
     if (won) winners++;
     await setAnswerOutcome(call.id, a.tg_id, won ? "won" : "lost", reward);
-    const user = await applyUserResult(a.tg_id, won, reward);
+    const res = await applyUserResult(a.tg_id, won, reward);
     await applyGroupResult(call.chat_id, a.tg_id, won);
-    postProof(call, a.tg_id, user?.handle ?? null, a.choice as "YES" | "NO", won, reward, settleTs).catch(() => {});
+    postProof(call, a.tg_id, res?.user.handle ?? null, a.choice as "YES" | "NO", won, reward, settleTs).catch(() => {});
+    // Economy touch-points: offer to buy back a broken streak, or praise a crossed one.
+    if (res) {
+      if (!won && res.prevStreak >= STREAK_SAVE_MIN) {
+        offerStreakSave(a.tg_id, call.chat_id, res.prevStreak, res.user.notify).catch(() => {});
+      } else if (won && STREAK_MILESTONES.includes(res.streak) && res.prevStreak < res.streak) {
+        dmMilestone(a.tg_id, res.streak, res.user.notify).catch(() => {});
+      }
+    }
   }
   const word = RESULT_WORD[call.market] ?? call.market;
   const head = result === "yes" ? `✅ ${call.team} ${word} landed. YES wins.` : `❌ No ${call.team} ${word} in time. NO wins.`;

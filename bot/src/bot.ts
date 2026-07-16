@@ -1,9 +1,10 @@
 import { InlineKeyboard, GrammyError } from "grammy";
 import { bot } from "./instance.ts";
 import { env } from "./env.ts";
-import { ensureUser, getUser, upsertChat, setChatActive, setChatQuiet, groupTop, userRank, setUserNotify } from "./db.ts";
+import { ensureUser, getUser, upsertChat, setChatActive, setChatQuiet, groupTop, userRank, setUserNotify, redeemStreakSave } from "./db.ts";
 import { handleAnswer } from "./calls.ts";
 import { startArchivedSession } from "./replay.ts";
+import { STREAK_SAVE_WINDOW_MS } from "./config.ts";
 
 const isGroup = (t: string) => t === "group" || t === "supergroup";
 
@@ -230,6 +231,33 @@ bot.callbackQuery(/^ans:(\d+):(YES|NO)$/, async (ctx) => {
     await ctx.answerCallbackQuery({ text });
   } catch (e) {
     console.error("answer", e);
+    await ctx.answerCallbackQuery({ text: "Something went wrong, try again." });
+  }
+});
+
+// A streak-save tap. callback_data = "save:<offerId>". Server decides price + target;
+// the button carries only the id.
+bot.callbackQuery(/^save:(\d+)$/, async (ctx) => {
+  const from = ctx.from;
+  if (!from) return;
+  const saveId = Number(ctx.match[1]);
+  try {
+    const r = await redeemStreakSave(saveId, from.id, STREAK_SAVE_WINDOW_MS);
+    if (r.ok) {
+      await ctx.answerCallbackQuery({ text: `Saved. Back to 🔥${r.streak}.` });
+      try {
+        await ctx.editMessageText(`✅ Streak saved. You're back to 🔥${r.streak}. ${r.cost} SPIKES spent, ${r.spikes.toLocaleString()} left.`);
+      } catch {}
+    } else {
+      const msg =
+        r.reason === "insufficient" ? "Not enough SPIKES to save this streak." :
+        r.reason === "expired" ? "This offer has expired." :
+        r.reason === "used" ? "You already saved this streak." :
+        "This offer is no longer available.";
+      await ctx.answerCallbackQuery({ text: msg });
+    }
+  } catch (e) {
+    console.error("save", e);
     await ctx.answerCallbackQuery({ text: "Something went wrong, try again." });
   }
 });
