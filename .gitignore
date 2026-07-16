@@ -45,3 +45,8 @@ next-env.d.ts
 .env
 
 .vercel
+
+# local dev-agent notes (kept out of the public repo)
+CLAUDE.md
+AGENTS.md
+.claude/
