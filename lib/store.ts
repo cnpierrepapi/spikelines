@@ -27,6 +27,15 @@ const STREAK_SAVE_SCHEDULE = [25, 50, 125, 150, 175];
 const has = () => typeof window !== "undefined";
 const dayKey = () => SAVES_PREFIX + new Date().toISOString().slice(0, 10);
 
+// Optional balance sync hook, registered by the Telegram Mini App bridge. Called
+// with the SIGNED delta whenever the local balance changes, so solo app play mirrors
+// to the player's server balance. No-op on plain web (hook stays null).
+type BalanceSyncHook = (delta: number) => void;
+let balanceSync: BalanceSyncHook | null = null;
+export function setBalanceSyncHook(fn: BalanceSyncHook | null) {
+  balanceSync = fn;
+}
+
 // ── SPIKES balance ────────────────────────────────────────────────
 export function getBalance(): number {
   if (!has()) return 0;
@@ -35,6 +44,7 @@ export function getBalance(): number {
 export function addBalance(n: number) {
   if (!has()) return;
   localStorage.setItem(BAL_KEY, String(getBalance() + n));
+  balanceSync?.(n);
 }
 // Set the balance to an authoritative value (e.g. server balance after a pack buy).
 export function setBalance(n: number) {
@@ -47,6 +57,7 @@ export function spendBalance(n: number): boolean {
   const bal = getBalance();
   if (bal < n) return false;
   localStorage.setItem(BAL_KEY, String(bal - n));
+  balanceSync?.(-n);
   return true;
 }
 

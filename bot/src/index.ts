@@ -18,7 +18,7 @@ async function main() {
     { command: "play", description: "Replay a past match (in a group)" },
     { command: "me", description: "Your stats" },
     { command: "top", description: "Group leaderboard" },
-    { command: "link", description: "Connect a Solana wallet" },
+    { command: "wallet", description: "Buy SPIKES / withdraw (in app)" },
     { command: "mute", description: "Mute kickoff alerts" },
     { command: "help", description: "How it works" },
   ]);

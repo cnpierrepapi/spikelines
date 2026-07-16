@@ -8,15 +8,7 @@
 import { useEffect, useRef } from "react";
 import { getUsername, setUsername } from "@/lib/store";
 import { claimUsername } from "@/lib/remote";
-
-const ADJ = ["Clinical", "Offside", "Silky", "Rapid", "Iron", "Golden", "Counter", "Total", "Deep", "High", "Late", "Long", "Near", "Wired", "Set", "Lofted"];
-const NOUN = ["Poacher", "Libero", "Sweeper", "Winger", "Target", "Playmaker", "Striker", "Anchor", "Maestro", "Sniper", "Engine", "Pivot", "Outlet", "Finisher", "Keeper", "Wall"];
-
-// e.g. "ClinicalPoacher47" — always matches the /^[a-zA-Z0-9_-]{3,20}$/ handle rule.
-function randomName(): string {
-  const pick = <T,>(a: T[]) => a[Math.floor(Math.random() * a.length)];
-  return `${pick(ADJ)}${pick(NOUN)}${10 + Math.floor(Math.random() * 90)}`;
-}
+import { randomHandle as randomName } from "@/lib/handle";
 
 export default function UsernameGate({ onReady }: { onReady?: (name: string) => void }) {
   const done = useRef(false);

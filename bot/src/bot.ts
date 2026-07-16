@@ -74,7 +74,7 @@ bot.command("help", async (ctx) => {
       (dm ? "" : "/play — replay a past match together (any time)\n") +
       "/me — your SPIKES, streak and record\n" +
       "/top — leaderboard" + (dm ? "" : " for this group") + "\n" +
-      "/link — connect a Solana wallet\n" +
+      "/wallet — buy SPIKES, withdraw, connect wallet\n" +
       (dm ? "/mute — turn kickoff alerts off (/unmute on)\n" : "/quiet — pause calls in this group (admins)\n") +
       "\nSPIKE packs and USDC withdrawals live in the app, tap Open Spikelines.",
     isGroup(ctx.chat?.type ?? "")
@@ -100,6 +100,20 @@ bot.command("link", async (ctx) => {
     "Connect a Solana wallet to sync your SPIKES and prove your calls on-chain. It opens in the app, your keys never leave your wallet.",
     { reply_markup: kb }
   );
+});
+
+// SPIKE packs + USDC withdrawals live in the Mini App (never in chat). This just
+// deep-links there. DM-only, so the buttons can be Web App launchers.
+bot.command("wallet", async (ctx) => {
+  if (isGroup(ctx.chat?.type ?? "")) {
+    await ctx.reply("DM me /wallet to buy SPIKES or withdraw privately.");
+    return;
+  }
+  const kb = new InlineKeyboard()
+    .webApp("💰 Buy SPIKES", env.MINIAPP_URL + "/profile").row()
+    .webApp("↗ Withdraw USDC", env.MINIAPP_URL + "/profile").row()
+    .webApp("🔗 Connect wallet", env.MINIAPP_URL + "/profile");
+  await ctx.reply("Manage your SPIKES and USDC in the app. Packs and withdrawals happen here; your keys never leave your wallet.", { reply_markup: kb });
 });
 
 bot.command("top", async (ctx) => {
